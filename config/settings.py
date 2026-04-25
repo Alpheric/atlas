@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     key_pool_strategy: str = "round_robin"
     encryption_key: str = ""
 
+    # Claude CLI multi-account pool
+    # List of Linux usernames whose ~/.claude/.credentials.json should be used.
+    # Each user must already be logged in via `claude login`.
+    # If empty, falls back to the current process user.
+    claude_cli_users: list[str] = []
+
     # Distillation / Auto-training
     distillation_enabled: bool = True
     distillation_claude_model: str = "claude-opus-4-20250514"

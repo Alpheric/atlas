@@ -159,7 +159,7 @@ providers:
       - url: http://10.0.0.10:11434
         name: alpheric.com
         description: QA, security, reasoning, DevOps, multimodal
-        # Models: codellama:13b, deepseek-r1:8b, mistral:7b, gemma4:12b
+        # Models: codellama:13b, deepseek-r1:8b, mistral:7b, gemma3:12b
     models: []  # auto-discovered
 
   # --- OpenClaw Gateway (local network AI gateway) ---
@@ -182,7 +182,7 @@ providers:
         supports_streaming: true
         task_types: [chat, general, creative]
         description: "Planning, discussion, brainstorming"
-        local_fallback: gemma4:12b
+        local_fallback: gemma3:12b
         provider_preference: [moonshot, groq, anthropic, claude-cli, openai]
         provider_models:
           moonshot: moonshot-v1-128k
@@ -263,7 +263,7 @@ providers:
         supports_streaming: true
         task_types: [analysis, summarization, math]
         description: "Data analysis, statistics, ETL"
-        local_fallback: gemma4:12b
+        local_fallback: gemma3:12b
         provider_preference: [openai, moonshot, groq, anthropic, claude-cli]
         provider_models:
           openai: gpt-4o
@@ -284,7 +284,7 @@ providers:
         supports_streaming: true
         task_types: [creative, summarization, translation]
         description: "Documentation, writing, research"
-        local_fallback: gemma4:12b
+        local_fallback: gemma3:12b
         provider_preference: [moonshot, openai, groq, anthropic, claude-cli]
         provider_models:
           moonshot: moonshot-v1-128k

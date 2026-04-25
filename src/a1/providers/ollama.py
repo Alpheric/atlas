@@ -45,6 +45,9 @@ class OllamaProvider(LLMProvider):
         self._servers: list[OllamaServer] = []
         self._model_to_server: dict[str, OllamaServer] = {}
         self._models: list[ModelInfo] = []
+        # Persistent per-server HTTP clients — reuses TCP connections instead of
+        # opening a new socket per request (saves ~50-100ms per call).
+        self._clients: dict[str, httpx.AsyncClient] = {}
 
     async def discover_models(self):
         """Discover models from all configured Ollama servers."""
@@ -98,43 +101,80 @@ class OllamaProvider(LLMProvider):
         total = len(self._models)
         healthy = sum(1 for s in self._servers if s.healthy)
         log.info(f"Ollama: {total} models across {healthy}/{len(self._servers)} servers")
+        # Pre-warm models into VRAM so the first real request has no cold-start delay.
+        await self._warm_up_models()
+
+    async def _warm_up_models(self):
+        """Send a minimal generation to each server to load models into VRAM."""
+        import asyncio
+        tasks = []
+        for server in self._servers:
+            if not server.healthy or not server.models:
+                continue
+            client, _ = self._get_client_for_model(server.models[0].name)
+            # num_predict=1 generates one token — just enough to load weights into VRAM.
+            payload = {
+                "model": server.models[0].name,
+                "prompt": "hi",
+                "stream": False,
+                "options": {"num_predict": 1, "keep_alive": -1},
+            }
+            tasks.append(client.post("/api/generate", json=payload))
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, r in enumerate(results):
+                if isinstance(r, Exception):
+                    log.warning(f"Warm-up failed for server {i}: {r}")
+                else:
+                    log.info(f"Warm-up done for server {i}")
 
     def _get_client_for_model(self, model: str) -> tuple[httpx.AsyncClient, str]:
-        """Get the HTTP client for the server that has this model."""
+        """Return the persistent HTTP client for the server hosting this model."""
         server = self._model_to_server.get(model)
-        if server:
-            return httpx.AsyncClient(base_url=server.url, timeout=300.0), server.url
-
-        # Model name "local" — use first healthy server
-        for s in self._servers:
-            if s.healthy and s.models:
-                return httpx.AsyncClient(base_url=s.url, timeout=300.0), s.url
-
-        # Fallback to primary
-        return httpx.AsyncClient(
-            base_url=settings.ollama_base_url, timeout=300.0
-        ), settings.ollama_base_url
+        if not server:
+            for s in self._servers:
+                if s.healthy and s.models:
+                    server = s
+                    break
+        url = server.url if server else settings.ollama_base_url
+        if url not in self._clients:
+            self._clients[url] = httpx.AsyncClient(
+                base_url=url,
+                timeout=httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0),
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return self._clients[url], url
 
     def get_server_for_model(self, model: str) -> str:
         """Get the server URL for a model (for display/logging)."""
         server = self._model_to_server.get(model)
         return server.url if server else settings.ollama_base_url
 
+    def _build_options(self, request: ChatCompletionRequest) -> dict:
+        """Build Ollama options dict from the request."""
+        opts: dict = {
+            # Keep model loaded indefinitely — eliminates cold-start reload delay.
+            "keep_alive": -1,
+            # Limit output to what was requested so Ollama doesn't over-generate.
+            "num_predict": request.max_tokens or 2048,
+        }
+        if request.temperature is not None:
+            opts["temperature"] = request.temperature
+        return opts
+
     async def complete(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         model = request.model
         if model == "local" and self._models:
             model = self._models[0].name
 
-        client, server_url = self._get_client_for_model(model)
+        client, _ = self._get_client_for_model(model)
         messages = [{"role": m.role, "content": m.content or ""} for m in request.messages]
-        payload = {"model": model, "messages": messages, "stream": False}
-        if request.temperature is not None:
-            payload["options"] = {"temperature": request.temperature}
+        payload = {"model": model, "messages": messages, "stream": False,
+                   "options": self._build_options(request)}
 
-        async with client:
-            resp = await client.post("/api/chat", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        resp = await client.post("/api/chat", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
 
         return ChatCompletionResponse(
             model=model,
@@ -152,9 +192,10 @@ class OllamaProvider(LLMProvider):
         if model == "local" and self._models:
             model = self._models[0].name
 
-        client, server_url = self._get_client_for_model(model)
+        client, _ = self._get_client_for_model(model)
         messages = [{"role": m.role, "content": m.content or ""} for m in request.messages]
-        payload = {"model": model, "messages": messages, "stream": True}
+        payload = {"model": model, "messages": messages, "stream": True,
+                   "options": self._build_options(request)}
         chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
         yield ChatCompletionChunk(
@@ -163,33 +204,31 @@ class OllamaProvider(LLMProvider):
             choices=[StreamChoice(delta=DeltaMessage(role="assistant"))],
         )
 
-        async with client:
-            async with client.stream("POST", "/api/chat", json=payload) as resp:
-                async for line in resp.aiter_lines():
-                    if not line.strip():
-                        continue
-                    data = json.loads(line)
-                    if data.get("done"):
-                        # Final chunk with usage data from Ollama
-                        yield ChatCompletionChunk(
-                            id=chunk_id,
-                            model=model,
-                            choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
-                            usage=Usage(
-                                prompt_tokens=data.get("prompt_eval_count", 0),
-                                completion_tokens=data.get("eval_count", 0),
-                                total_tokens=data.get("prompt_eval_count", 0)
-                                + data.get("eval_count", 0),
-                            ),
-                        )
-                        break
-                    content = data.get("message", {}).get("content", "")
-                    if content:
-                        yield ChatCompletionChunk(
-                            id=chunk_id,
-                            model=model,
-                            choices=[StreamChoice(delta=DeltaMessage(content=content))],
-                        )
+        async with client.stream("POST", "/api/chat", json=payload) as resp:
+            async for line in resp.aiter_lines():
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                if data.get("done"):
+                    yield ChatCompletionChunk(
+                        id=chunk_id,
+                        model=model,
+                        choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
+                        usage=Usage(
+                            prompt_tokens=data.get("prompt_eval_count", 0),
+                            completion_tokens=data.get("eval_count", 0),
+                            total_tokens=data.get("prompt_eval_count", 0)
+                            + data.get("eval_count", 0),
+                        ),
+                    )
+                    break
+                content = data.get("message", {}).get("content", "")
+                if content:
+                    yield ChatCompletionChunk(
+                        id=chunk_id,
+                        model=model,
+                        choices=[StreamChoice(delta=DeltaMessage(content=content))],
+                    )
 
     async def health_check(self) -> bool:
         return any(s.healthy for s in self._servers)

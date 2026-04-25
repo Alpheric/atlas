@@ -49,7 +49,7 @@ export default function FormModal({
       onCancel={onCancel}
       confirmLoading={submitting}
       okText={okText}
-      destroyOnClose
+      destroyOnHidden
     >
       {children}
     </Modal>

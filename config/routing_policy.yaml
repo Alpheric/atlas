@@ -7,14 +7,14 @@ default_strategy: best_quality
 # Task type -> preferred model + fallback chain
 # Servers:
 #   10.0.0.9  — code specialists: deepseek-coder-v2:16b, deepseek-coder:6.7b, llama3.2:latest, nomic-embed-text
-#   10.0.0.10 — reasoning & general: gemma4:12b, deepseek-r1:8b, mistral:7b, codellama:13b
+#   10.0.0.10 — reasoning & general: gemma3:12b, deepseek-r1:8b, mistral:7b, codellama:13b
 
 task_defaults:
   code:
     model: deepseek-coder-v2:16b            # S1 — best local code model
     fallback:
       - deepseek-coder:6.7b                 # S1 — lighter code fallback
-      - gemma4:12b                           # S2 — strong general coding (128K ctx)
+      - gemma3:12b                           # S2 — strong general coding (128K ctx)
       - codellama:13b                        # S2 — code review
       - claude-sonnet-4-20250514            # External
       - gpt-4o                              # External
@@ -22,12 +22,12 @@ task_defaults:
   infra:
     model: deepseek-r1:8b                   # S2 — reasoning for IaC/config generation
     fallback:
-      - gemma4:12b                           # S2 — strong reasoning, multimodal (screen/UI)
+      - gemma3:12b                           # S2 — strong reasoning, multimodal (screen/UI)
       - codellama:13b                        # S2 — code-aware fallback
       - claude-sonnet-4-20250514            # External
 
   chat:
-    model: gemma4:12b                        # S2 — best local chat quality (128K ctx, vision)
+    model: gemma3:12b                        # S2 — best local chat quality (128K ctx, vision)
     fallback:
       - llama3.2:latest                      # S1 — fast fallback
       - gpt-4o-mini                          # External (cheap)
@@ -36,25 +36,25 @@ task_defaults:
   analysis:
     model: deepseek-r1:8b                   # S2 — specialized reasoning
     fallback:
-      - gemma4:12b                           # S2 — broad analytical capability
+      - gemma3:12b                           # S2 — broad analytical capability
       - deepseek-coder-v2:16b              # S1 — structured thinking
       - claude-sonnet-4-20250514            # External
       - gpt-4o                              # External
 
   creative:
-    model: gemma4:12b                        # S2 — best local creative/writing quality
+    model: gemma3:12b                        # S2 — best local creative/writing quality
     fallback:
       - llama3.2:latest                      # S1 — fast fallback
       - claude-sonnet-4-20250514            # External
 
   summarization:
-    model: gemma4:12b                        # S2 — strong compression + multilingual
+    model: gemma3:12b                        # S2 — strong compression + multilingual
     fallback:
       - llama3.2:latest                      # S1 — fast fallback
       - gpt-4o-mini                          # External (cheap)
 
   translation:
-    model: gemma4:12b                        # S2 — multilingual, trained on 140+ languages
+    model: gemma3:12b                        # S2 — multilingual, trained on 140+ languages
     fallback:
       - mistral:7b                           # S2 — multilingual fallback
       - llama3.2:latest                      # S1 — quick fallback
@@ -63,7 +63,7 @@ task_defaults:
   math:
     model: deepseek-r1:8b                   # S2 — specialized math reasoning
     fallback:
-      - gemma4:12b                           # S2 — AIME 2026: 89.2%
+      - gemma3:12b                           # S2 — AIME 2026: 89.2%
       - deepseek-coder-v2:16b              # S1
       - o3-mini                             # External (strong math)
       - claude-sonnet-4-20250514            # External
@@ -71,14 +71,14 @@ task_defaults:
   structured_extraction:
     model: deepseek-r1:8b                   # S2 — reasoning + structured output
     fallback:
-      - gemma4:12b                           # S2 — vision helps with doc/PDF parsing
+      - gemma3:12b                           # S2 — vision helps with doc/PDF parsing
       - deepseek-coder:6.7b                # S1
       - gpt-4o                              # External
 
   general:
     model: llama3.2:latest                  # S1 — fastest for simple general tasks
     fallback:
-      - gemma4:12b                           # S2 — high quality when speed less critical
+      - gemma3:12b                           # S2 — high quality when speed less critical
       - deepseek-coder:6.7b               # S1
       - gpt-4o-mini                          # External (cheap)
 

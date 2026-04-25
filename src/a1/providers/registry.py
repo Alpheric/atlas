@@ -124,16 +124,36 @@ class ProviderRegistry:
         log.info("Registered Ollama provider")
 
         # Claude CLI proxy (uses local claude command for auth)
+        # If claude_cli_users is configured, spin up a round-robin pool across
+        # all listed Linux user accounts. Otherwise use the current process user.
         try:
-            from a1.providers.claude_cli import ClaudeCLIProvider
+            if settings.claude_cli_users:
+                from a1.providers.claude_cli import ClaudeCLIAccount, ClaudeCLIPool
 
-            claude_cli = ClaudeCLIProvider()
-            cli_healthy = await claude_cli.health_check()
-            if cli_healthy:
-                self._providers["claude-cli"] = claude_cli
-                log.info(f"Registered Claude CLI provider ({len(claude_cli.list_models())} models)")
+                accounts = [ClaudeCLIAccount(u) for u in settings.claude_cli_users]
+                pool = ClaudeCLIPool(accounts)
+                pool_healthy = await pool.health_check()
+                if pool_healthy:
+                    self._providers["claude-cli"] = pool
+                    log.info(
+                        f"Registered Claude CLI pool: {len(pool.healthy_accounts)}/"
+                        f"{len(accounts)} accounts healthy "
+                        f"({[a.unix_user for a in pool.healthy_accounts]})"
+                    )
+                else:
+                    log.warning("Claude CLI pool: no accounts healthy — skipping")
             else:
-                log.info("Claude CLI not available — skipping")
+                from a1.providers.claude_cli import ClaudeCLIProvider
+
+                claude_cli = ClaudeCLIProvider()
+                cli_healthy = await claude_cli.health_check()
+                if cli_healthy:
+                    self._providers["claude-cli"] = claude_cli
+                    log.info(
+                        f"Registered Claude CLI provider ({len(claude_cli.list_models())} models)"
+                    )
+                else:
+                    log.info("Claude CLI not available — skipping")
         except Exception as e:
             log.warning(f"Failed to register Claude CLI provider: {e}")
 

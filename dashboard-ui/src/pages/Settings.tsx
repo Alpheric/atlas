@@ -45,8 +45,6 @@ export default function SettingsPage() {
     setSaving(false);
   };
 
-  if (loading) return <PageSkeleton type="form" />;
-
   return (
     <div style={{ maxWidth: 700 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -56,7 +54,7 @@ export default function SettingsPage() {
         </Button>
       </div>
 
-      <Form form={form} layout="vertical" onValuesChange={() => setDirty(true)}>
+      <Form form={form} layout="vertical" onValuesChange={() => setDirty(true)} style={{ opacity: loading ? 0.5 : 1, pointerEvents: loading ? 'none' : 'auto' }}>
         {/* Provider Keys */}
         <Card title={<Space><KeyOutlined style={{ color: '#f59e0b' }} />Provider API Keys</Space>} size="small" style={{ marginBottom: 16 }}>
           <Form.Item name="anthropic_api_key" label="Anthropic API Key">

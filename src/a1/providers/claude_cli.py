@@ -104,27 +104,69 @@ class ClaudeCLIProvider(LLMProvider):
         self._healthy = False
         self._cli_path = self._find_claude_cli()
         self._models = list(CLAUDE_CLI_MODELS)
+        log.debug(f"Claude CLI path: {self._cli_path}")
+
+    def _build_cmd(self, args: list[str]) -> list[str]:
+        """Return full command list for the CLI. Subclasses can prepend sudo etc."""
+        return [self._cli_path] + args
 
     @staticmethod
-    def _find_claude_cli() -> str:
-        """Find the claude CLI executable path."""
+    def _find_claude_cli(home_dir: str | None = None) -> str:
+        """Find the claude CLI executable path.
+
+        Checks (in order):
+        1. CLAUDE_CODE_EXECPATH env var (set by Claude Code itself)
+        2. ~/.claude/remote/ccd-cli/<version> glob (Claude Code install layout)
+        3. Common PATH locations
+        """
+        import glob
         import os
         import shutil
         import sys
 
-        # Try common locations
+        effective_home = home_dir or os.path.expanduser("~")
+        current_home = os.path.expanduser("~")
+
+        # 1. Env var set by Claude Code harness — only trust it for the current user.
+        #    When home_dir points to a different user, skip this to avoid returning
+        #    the wrong user's binary.
+        if home_dir is None or os.path.abspath(home_dir) == os.path.abspath(current_home):
+            exec_path = os.environ.get("CLAUDE_CODE_EXECPATH")
+            if exec_path and os.path.isfile(exec_path) and os.access(exec_path, os.X_OK):
+                return exec_path
+
+        # 2. Versioned binary in ~/.claude/remote/ccd-cli/ (Claude Code layout)
+        ccd_pattern = os.path.join(effective_home, ".claude", "remote", "ccd-cli", "*")
+        ccd_matches = sorted(glob.glob(ccd_pattern), reverse=True)  # newest version first
+        for match in ccd_matches:
+            if os.path.isfile(match) and os.access(match, os.X_OK):
+                return match
+
+        # 3. Common PATH / Windows locations
         candidates = [
             shutil.which("claude"),
             shutil.which("claude.cmd"),
-            os.path.expanduser("~/AppData/Roaming/npm/claude.cmd"),
-            os.path.expanduser("~/AppData/Roaming/npm/claude"),
+            os.path.join(effective_home, "AppData", "Roaming", "npm", "claude.cmd"),
+            os.path.join(effective_home, "AppData", "Roaming", "npm", "claude"),
             "/usr/local/bin/claude",
         ]
         for path in candidates:
             if path and os.path.exists(path):
                 return path
 
-        # Fallback — let the OS find it via shell
+        # 4. For other-user accounts: fall back to current user's binary.
+        #    The binary is home-agnostic — it picks up credentials from $HOME at runtime.
+        if home_dir and os.path.abspath(home_dir) != os.path.abspath(current_home):
+            exec_path = os.environ.get("CLAUDE_CODE_EXECPATH")
+            if exec_path and os.path.isfile(exec_path) and os.access(exec_path, os.X_OK):
+                return exec_path
+            # Try current user's ccd-cli dir
+            ccd_pattern_current = os.path.join(current_home, ".claude", "remote", "ccd-cli", "*")
+            for match in sorted(glob.glob(ccd_pattern_current), reverse=True):
+                if os.path.isfile(match) and os.access(match, os.X_OK):
+                    return match
+
+        # Final fallback — let the OS find it via shell
         return "claude.cmd" if sys.platform == "win32" else "claude"
 
     @staticmethod
@@ -417,8 +459,7 @@ class ClaudeCLIProvider(LLMProvider):
             else user_prompt
         )
         stdin_data = stdin_text.encode("utf-8")
-        base_cmd = [
-            cli,
+        cli_args = [
             "-p",
             "-",  # read prompt from stdin
             "--max-turns",
@@ -429,6 +470,7 @@ class ClaudeCLIProvider(LLMProvider):
             "--system-prompt",
             atlas_identity,
         ]
+        base_cmd = self._build_cmd(cli_args)
 
         if sys.platform == "win32" and cli.lower().endswith((".cmd", ".bat")):
             exec_cmd = ["cmd.exe", "/c"] + base_cmd
@@ -591,3 +633,250 @@ class ClaudeCLIProvider(LLMProvider):
 
     def list_models(self) -> list[ModelInfo]:
         return self._models
+
+
+class ClaudeCLIAccount(ClaudeCLIProvider):
+    """Claude CLI provider scoped to a specific Linux user account.
+
+    Runs `claude` with HOME set to that user's home directory so it
+    picks up their ~/.claude/.credentials.json automatically.
+    """
+
+    def __init__(self, unix_user: str):
+        # Don't call super().__init__() — we need to resolve home first
+        self._healthy = False
+        self.unix_user = unix_user
+        self.name = f"claude-cli:{unix_user}"
+        self._models = list(CLAUDE_CLI_MODELS)
+        home = self._home_dir()
+        self._cli_path = ClaudeCLIProvider._find_claude_cli(home_dir=home)
+
+    def _build_cmd(self, args: list[str]) -> list[str]:
+        import os
+        current_user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        if self.unix_user != current_user:
+            return ["sudo", "-u", self.unix_user, self._cli_path] + args
+        return [self._cli_path] + args
+
+    def _home_dir(self) -> str:
+        import os
+        import pwd
+        try:
+            return pwd.getpwnam(self.unix_user).pw_dir
+        except KeyError:
+            return os.path.expanduser(f"~{self.unix_user}")
+
+    async def _exec(
+        self,
+        args: list[str],
+        timeout: float = 30,
+        stdin_data: bytes | None = None,
+    ) -> tuple[str, int, str]:
+        import os
+        import sys
+        import tempfile
+
+        cmd = self._build_cmd(args)
+
+        env = {
+            **os.environ,
+            "PYTHONIOENCODING": "utf-8",
+            "LANG": "en_US.UTF-8",
+            "HOME": self._home_dir(),
+        }
+
+        stdin_pipe = asyncio.subprocess.PIPE if stdin_data else None
+        cwd = tempfile.gettempdir()
+        exec_cmd = cmd
+        proc = await asyncio.create_subprocess_exec(
+            *exec_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            stdin=stdin_pipe,
+            env=env,
+            cwd=cwd,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=stdin_data),
+            timeout=timeout,
+        )
+        return (
+            stdout.decode("utf-8", errors="replace").strip(),
+            proc.returncode or 0,
+            stderr.decode("utf-8", errors="replace").strip(),
+        )
+
+    async def health_check(self) -> bool:
+        import json as _json
+        import os
+        from pathlib import Path
+
+        home = Path(self._home_dir())
+        cred_path = home / ".claude" / ".credentials.json"
+        current_user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+
+        if self.unix_user == current_user:
+            # Same user — read directly and verify OAuth creds are present.
+            try:
+                data = _json.loads(cred_path.read_text())
+                if "claudeAiOauth" not in data:
+                    log.warning(
+                        f"Claude CLI account {self.unix_user}: "
+                        f"credentials.json has no claudeAiOauth — run 'claude login'"
+                    )
+                    self._healthy = False
+                    return False
+            except (FileNotFoundError, PermissionError, _json.JSONDecodeError) as e:
+                log.warning(f"Claude CLI account {self.unix_user}: cannot read credentials: {e}")
+                self._healthy = False
+                return False
+        else:
+            # Other user — sudo-read their credentials file to verify OAuth is present.
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "sudo", "-n", "-u", self.unix_user,
+                    "cat", str(cred_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+                if proc.returncode == 0:
+                    data = _json.loads(stdout.decode("utf-8", errors="replace"))
+                    if "claudeAiOauth" not in data:
+                        log.warning(
+                            f"Claude CLI account {self.unix_user}: "
+                            f"credentials.json has no claudeAiOauth — run 'claude login'"
+                        )
+                        self._healthy = False
+                        return False
+            except Exception as e:
+                log.debug(f"Claude CLI account {self.unix_user}: credentials check skipped: {e}")
+                # Fall through — let --version decide
+
+        try:
+            version, code, _ = await self._exec(["--version"], timeout=10)
+            if version and code == 0:
+                self._healthy = True
+                log.info(f"Claude CLI account {self.unix_user} healthy: {version}")
+                return True
+        except Exception as e:
+            log.warning(f"Claude CLI account {self.unix_user} health check failed: {e}")
+
+        self._healthy = False
+        return False
+
+
+class ClaudeCLIPool(LLMProvider):
+    """Round-robin pool of Claude CLI accounts with session affinity.
+
+    - New sessions are assigned to the next healthy account (round-robin).
+    - Subsequent requests in the same session always go to the same account
+      so conversation history stays coherent and no context is lost.
+    - Per-account usage stats (requests, tokens, cost) are tracked and
+      exposed via pool_status() for the dashboard.
+    """
+
+    name = "claude-cli"
+
+    def __init__(self, accounts: list[ClaudeCLIAccount]):
+        if not accounts:
+            raise ValueError("ClaudeCLIPool requires at least one account")
+        self._accounts = accounts
+        self._healthy: list[bool] = [False] * len(accounts)
+        self._counter = 0
+        # session_id → account index (session affinity)
+        self._session_map: dict[str, int] = {}
+        # per-account counters: {unix_user: {requests, input_tokens, output_tokens, cost_usd}}
+        self._usage: dict[str, dict] = {
+            a.unix_user: {"requests": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+            for a in accounts
+        }
+
+    def _pick_account(self, session_id: str | None) -> tuple[ClaudeCLIAccount, int] | tuple[None, None]:
+        """Return (account, index) for this request.
+
+        If session_id is known, returns the pinned account (even if temporarily
+        unhealthy — better to retry same account than lose session context).
+        Otherwise round-robins to the next healthy account and pins it.
+        """
+        if session_id and session_id in self._session_map:
+            idx = self._session_map[session_id]
+            return self._accounts[idx], idx
+
+        # New session — pick next healthy account
+        n = len(self._accounts)
+        for i in range(n):
+            idx = (self._counter + i) % n
+            if self._healthy[idx]:
+                self._counter = (idx + 1) % n
+                if session_id:
+                    self._session_map[session_id] = idx
+                return self._accounts[idx], idx
+        return None, None
+
+    def _record_usage(self, unix_user: str, response: ChatCompletionResponse) -> None:
+        u = self._usage.get(unix_user)
+        if u is None:
+            return
+        u["requests"] += 1
+        if response.usage:
+            u["input_tokens"] += response.usage.prompt_tokens or 0
+            u["output_tokens"] += response.usage.completion_tokens or 0
+
+    async def health_check(self) -> bool:
+        results = await asyncio.gather(
+            *[acc.health_check() for acc in self._accounts],
+            return_exceptions=True,
+        )
+        for i, r in enumerate(results):
+            self._healthy[i] = bool(r) if not isinstance(r, Exception) else False
+        healthy_count = sum(self._healthy)
+        log.info(
+            f"Claude CLI pool: {healthy_count}/{len(self._accounts)} accounts healthy "
+            f"({[a.unix_user for a, h in zip(self._accounts, self._healthy) if h]})"
+        )
+        return healthy_count > 0
+
+    async def complete(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
+        session_id = getattr(request, "session_id", None)
+        account, _ = self._pick_account(session_id)
+        if not account:
+            raise RuntimeError("No healthy Claude CLI accounts available in pool")
+        response = await account.complete(request)
+        self._record_usage(account.unix_user, response)
+        return response
+
+    async def stream(self, request: ChatCompletionRequest) -> AsyncIterator[ChatCompletionChunk]:
+        session_id = getattr(request, "session_id", None)
+        account, _ = self._pick_account(session_id)
+        if not account:
+            raise RuntimeError("No healthy Claude CLI accounts available in pool")
+        async for chunk in account.stream(request):
+            yield chunk
+
+    def pool_status(self) -> list[dict]:
+        """Return per-account health and usage — for dashboard display."""
+        return [
+            {
+                "user": a.unix_user,
+                "healthy": self._healthy[i],
+                "cli_path": a._cli_path,
+                "sessions": sum(1 for v in self._session_map.values() if v == i),
+                **self._usage.get(a.unix_user, {}),
+            }
+            for i, a in enumerate(self._accounts)
+        ]
+
+    def supports_model(self, model: str) -> bool:
+        return any(m.name == model for m in CLAUDE_CLI_MODELS)
+
+    def list_models(self) -> list[ModelInfo]:
+        return list(CLAUDE_CLI_MODELS)
+
+    @property
+    def accounts(self) -> list[ClaudeCLIAccount]:
+        return self._accounts
+
+    @property
+    def healthy_accounts(self) -> list[ClaudeCLIAccount]:
+        return [a for a, h in zip(self._accounts, self._healthy) if h]

@@ -146,9 +146,21 @@ class TaskResponseCache:
             return None
         return text
 
+    # Substrings that indicate the response is a CLI/auth error, not real content.
+    _ERROR_MARKERS = (
+        "not logged in",
+        "please run /login",
+        "authentication failed",
+        "api key",
+        "rate limit exceeded",
+    )
+
     def put(self, atlas_model: str, messages: list[dict], text: str, task_type: str) -> None:
         """Store a response text with TTL derived from task_type."""
         if not text:
+            return
+        lower = text.lower()
+        if any(marker in lower for marker in self._ERROR_MARKERS):
             return
         # Simple FIFO eviction when full
         if len(self._store) >= self._max_size:

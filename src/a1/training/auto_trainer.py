@@ -121,7 +121,7 @@ _DISTILL_TIMEOUT = 30  # seconds — skip if local model is too slow
 _DISTILL_MAX_INPUT = 2000  # chars — truncate long prompts for local
 # Prefer fastest local models for distillation comparison
 _DISTILL_MODEL_PREFERENCE = [
-    "gemma4:12b",  # best general quality, server 2 (10.0.0.10)
+    "gemma3:12b",  # best general quality, server 2 (10.0.0.10)
     "llama3.2:latest",  # fastest, server 1 (10.0.0.9)
     "mistral:7b",  # server 2
     "deepseek-coder:6.7b",  # code tasks, server 1

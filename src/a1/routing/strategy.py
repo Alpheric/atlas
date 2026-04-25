@@ -118,7 +118,7 @@ async def select_model(task_type: str, strategy: str) -> tuple[str, str]:
                 return fb_model, fb_provider
 
         # Last resort: prefer fast English models
-        preferred_fallbacks = ["gemma4:12b", "llama3.2:latest", "mistral:7b", "deepseek-coder:6.7b"]
+        preferred_fallbacks = ["gemma3:12b", "llama3.2:latest", "mistral:7b", "deepseek-coder:6.7b"]
         for pref in preferred_fallbacks:
             for name, provider in provider_registry.healthy_providers.items():
                 if provider.supports_model(pref):

@@ -420,3 +420,50 @@ async def set_budget(body: dict, db: AsyncSession = Depends(get_db)):
         "monthly_limit_usd": float(budget.monthly_limit_usd),
         "status": "set",
     }
+
+
+# ---------------------------------------------------------------------------
+# Compliance Summary
+# ---------------------------------------------------------------------------
+
+@router.get("/governance/compliance")
+async def compliance_summary(db: AsyncSession = Depends(get_db)):
+    """Return a compliance summary: approval stats, audit coverage, model governance."""
+    from sqlalchemy import func, select
+    from a1.db.models import ApprovalRequest, AuditEvent, ModelVersion
+
+    # Approval stats
+    approval_result = await db.execute(
+        select(ApprovalRequest.status, func.count().label("count"))
+        .group_by(ApprovalRequest.status)
+    )
+    approval_counts = {row.status: row.count for row in approval_result}
+
+    # Audit event count (last 30 days)
+    from a1.common.tz import now_ist
+    import datetime
+    since = now_ist() - datetime.timedelta(days=30)
+    audit_result = await db.execute(
+        select(func.count()).select_from(AuditEvent).where(AuditEvent.created_at >= since)
+    )
+    audit_count = audit_result.scalar() or 0
+
+    # Model version status breakdown
+    mv_result = await db.execute(
+        select(ModelVersion.status, func.count().label("count"))
+        .group_by(ModelVersion.status)
+    )
+    mv_counts = {row.status: row.count for row in mv_result}
+
+    return {
+        "approvals": {
+            "pending": approval_counts.get("pending", 0),
+            "approved": approval_counts.get("approved", 0),
+            "rejected": approval_counts.get("rejected", 0),
+        },
+        "audit_events_last_30d": audit_count,
+        "model_versions": mv_counts,
+        "compliance_score": 100 if approval_counts.get("pending", 0) == 0 else max(
+            0, 100 - approval_counts.get("pending", 0) * 10
+        ),
+    }

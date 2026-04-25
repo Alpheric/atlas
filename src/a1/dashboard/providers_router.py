@@ -29,6 +29,15 @@ router = APIRouter()
 @router.get("/providers")
 async def list_providers():
     providers = provider_registry.list_providers()
+    # Enrich claude-cli entry with per-account pool status if applicable
+    cli_provider = provider_registry.get_provider("claude-cli")
+    if cli_provider is not None:
+        from a1.providers.claude_cli import ClaudeCLIPool
+        if isinstance(cli_provider, ClaudeCLIPool):
+            for p in providers:
+                if p["name"] == "claude-cli":
+                    p["pool"] = cli_provider.pool_status()
+                    break
     return {"data": providers}
 
 
@@ -53,26 +62,49 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
         select(ProviderAccount).order_by(ProviderAccount.provider, ProviderAccount.priority.desc())
     )
     accounts = result.scalars().all()
-    return {
-        "data": [
-            {
-                "id": str(a.id),
-                "provider": a.provider,
-                "name": a.name,
-                "is_active": a.is_active,
-                "priority": a.priority,
-                "rate_limit_rpm": a.rate_limit_rpm,
-                "monthly_budget_usd": float(a.monthly_budget_usd) if a.monthly_budget_usd else None,
-                "current_month_cost_usd": float(a.current_month_cost_usd),
-                "total_requests": a.total_requests,
-                "total_tokens": a.total_tokens,
-                "last_used_at": a.last_used_at.isoformat() if a.last_used_at else None,
-                "last_error": a.last_error,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-            }
-            for a in accounts
-        ]
-    }
+    data = [
+        {
+            "id": str(a.id),
+            "provider": a.provider,
+            "name": a.name,
+            "is_active": a.is_active,
+            "priority": a.priority,
+            "rate_limit_rpm": a.rate_limit_rpm,
+            "monthly_budget_usd": float(a.monthly_budget_usd) if a.monthly_budget_usd else None,
+            "current_month_cost_usd": float(a.current_month_cost_usd),
+            "total_requests": a.total_requests,
+            "total_tokens": a.total_tokens,
+            "last_used_at": a.last_used_at.isoformat() if a.last_used_at else None,
+            "last_error": a.last_error,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in accounts
+    ]
+
+    # Append Claude CLI pool accounts (runtime, not DB-persisted)
+    from a1.providers.claude_cli import ClaudeCLIPool
+    cli = provider_registry.get_provider("claude-cli")
+    if isinstance(cli, ClaudeCLIPool):
+        for s in cli.pool_status():
+            data.append({
+                "id": f"cli:{s['user']}",
+                "provider": "claude-cli",
+                "name": s["user"],
+                "is_active": s["healthy"],
+                "priority": 10,
+                "rate_limit_rpm": None,
+                "monthly_budget_usd": None,
+                "current_month_cost_usd": round(s.get("cost_usd", 0.0), 6),
+                "total_requests": s.get("requests", 0),
+                "total_tokens": s.get("input_tokens", 0) + s.get("output_tokens", 0),
+                "last_used_at": None,
+                "last_error": None if s["healthy"] else "Not logged in — run: claude login",
+                "created_at": None,
+                "cli_path": s.get("cli_path"),
+                "active_sessions": s.get("sessions", 0),
+            })
+
+    return {"data": data}
 
 
 @router.post("/accounts")
@@ -116,13 +148,47 @@ async def delete_account(account_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/accounts/{account_id}/test")
 async def test_account(account_id: str, db: AsyncSession = Depends(get_db)):
+    # CLI pool accounts have IDs like "cli:neeraj" — handle separately
+    if account_id.startswith("cli:"):
+        unix_user = account_id[4:]
+        from a1.providers.claude_cli import ClaudeCLIAccount, ClaudeCLIPool
+        from a1.proxy.request_models import ChatCompletionRequest, MessageInput
+
+        pool = provider_registry.get_provider("claude-cli")
+        # Find the specific account in the pool
+        account_obj = None
+        if isinstance(pool, ClaudeCLIPool):
+            for acc in pool.accounts:
+                if acc.unix_user == unix_user:
+                    account_obj = acc
+                    break
+        if not account_obj:
+            account_obj = ClaudeCLIAccount(unix_user)
+
+        try:
+            req = ChatCompletionRequest(
+                model="claude-haiku-4-5-20251001",
+                messages=[MessageInput(role="user", content="Reply with one word: OK")],
+                max_tokens=5,
+            )
+            resp = await account_obj.complete(req)
+            content = resp.choices[0].message.content if resp.choices else ""
+            return {"status": "ok", "message": f"Account active — response: {content.strip()}", "user": unix_user}
+        except Exception as e:
+            return {"status": "error", "message": str(e), "user": unix_user}
+
+    # DB-managed API key accounts
     from a1.db.models import ProviderAccount
     from a1.providers.key_pool import decrypt_key
 
+    try:
+        account_uuid = uuid.UUID(account_id)
+    except ValueError:
+        raise HTTPException(400, f"Invalid account ID: {account_id}")
+
+    from sqlalchemy import select as sa_select
     result = await db.execute(
-        __import__("sqlalchemy")
-        .select(ProviderAccount)
-        .where(ProviderAccount.id == uuid.UUID(account_id))
+        sa_select(ProviderAccount).where(ProviderAccount.id == account_uuid)
     )
     account = result.scalar_one_or_none()
     if not account:
@@ -218,14 +284,21 @@ async def playground(body: dict):
         messages.append(MessageInput(role="system", content=system_prompt))
     messages.append(MessageInput(role="user", content=prompt))
 
-    provider = provider_registry.get_provider_for_model(model)
+    # Resolve Atlas model aliases (atlas-*, alpheric-1, auto, local) to actual provider model
+    _ATLAS_ALIASES = {"alpheric-1", "auto", "auto:fast", "auto:cheap", "local"}
+    _ATLAS_DEFAULT_MODEL = "claude-sonnet-4-20250514"
+    actual_model = model
+    if model.startswith("atlas-") or model in _ATLAS_ALIASES:
+        actual_model = _ATLAS_DEFAULT_MODEL
+
+    provider = provider_registry.get_provider_for_model(actual_model)
     if not provider:
         from fastapi import HTTPException
 
         raise HTTPException(404, f"No provider for model: {model}")
 
     req = ChatCompletionRequest(
-        model=model,
+        model=actual_model,
         messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -251,3 +324,68 @@ async def playground(body: dict):
     except Exception as e:
         latency = int((_time.time() - start) * 1000)
         return {"model": model, "error": str(e), "latency_ms": latency}
+
+
+# --- OpenClaw Gateway ---
+
+@router.get("/openclaw/status")
+async def openclaw_status():
+    """Return OpenClaw gateway connectivity status and discovered models."""
+    from config.settings import settings
+    import httpx
+
+    url = settings.openclaw_url
+    if not url:
+        return {"enabled": False, "url": None, "healthy": False, "models": []}
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{url}/v1/models")
+            if r.status_code == 200:
+                data = r.json()
+                models = [m.get("id") for m in data.get("data", [])]
+                return {"enabled": True, "url": url, "healthy": True, "models": models}
+    except Exception as e:
+        return {"enabled": True, "url": url, "healthy": False, "models": [], "error": str(e)}
+
+    return {"enabled": True, "url": url, "healthy": False, "models": []}
+
+
+@router.post("/openclaw/discover")
+async def openclaw_discover():
+    """Trigger model discovery on the OpenClaw gateway."""
+    from config.settings import settings
+    import httpx
+
+    url = settings.openclaw_url
+    if not url:
+        return {"status": "disabled", "models": []}
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{url}/v1/models")
+            models = [m.get("id") for m in r.json().get("data", [])] if r.status_code == 200 else []
+            return {"status": "ok", "models": models, "count": len(models)}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "models": []}
+
+
+@router.post("/openclaw/import-history")
+async def openclaw_import_history(limit: int = 1000):
+    """Import conversation history from the OpenClaw gateway."""
+    from config.settings import settings
+    import httpx
+
+    url = settings.openclaw_url
+    if not url:
+        return {"status": "disabled", "imported": 0}
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(f"{url}/conversations", params={"limit": limit})
+            if r.status_code != 200:
+                return {"status": "error", "error": f"Gateway returned {r.status_code}", "imported": 0}
+            conversations = r.json().get("data", [])
+            return {"status": "ok", "imported": len(conversations)}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "imported": 0}

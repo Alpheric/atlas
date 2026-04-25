@@ -296,6 +296,7 @@ class CorePipeline:
             messages=inp.messages,
             max_tokens=inp.max_tokens,
             temperature=inp.temperature,
+            session_id=inp.session_id,
         )
         try:
             model_info = await select_model(
@@ -399,6 +400,7 @@ class CorePipeline:
             messages=inp.messages,
             max_tokens=inp.max_tokens,
             temperature=inp.temperature,
+            session_id=inp.session_id,
         )
 
         _, ext_name, _ = _get_external_provider(atlas_model)
