@@ -46,10 +46,14 @@ async def _verify_key(
 ) -> str:
     """Verify x-api-key (Anthropic) or Authorization: Bearer (OpenAI).
 
+    Accepts keys from two sources (same logic as verify_api_key in auth.py):
+      1. settings.api_keys — env-var master keys
+      2. api_keys DB table  — per-user keys created via the dashboard
+
     Returns the raw key string. Raises HTTPException with Anthropic error shape
-    on failure so clients parse errors correctly.
+    on failure so clients (Claude Code, Cursor, Hermes, etc.) parse errors correctly.
     """
-    from a1.common.auth import _enforce_rate_limit, _resolve_key_info
+    from a1.common.auth import _enforce_rate_limit, _resolve_key_info, _verify_key_in_db
 
     if not settings.api_keys:
         return "dev"
@@ -73,19 +77,26 @@ async def _verify_key(
             },
         )
 
-    if key not in settings.api_keys:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "type": "error",
-                "error": {
-                    "type": "authentication_error",
-                    "message": "Invalid API key.",
-                },
-            },
-        )
-
     key_h = hash_key(key)
+
+    if key not in settings.api_keys:
+        # Not a master key — check DB for a user-created key
+        if not await _verify_key_in_db(key_h):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "type": "error",
+                    "error": {
+                        "type": "authentication_error",
+                        "message": "Invalid API key.",
+                    },
+                },
+            )
+        # Valid DB key — update last_used timestamp in background
+        import asyncio
+        from a1.common.auth import _update_key_last_used
+        asyncio.create_task(_update_key_last_used(key_h))
+
     _, _, rate_limit = await _resolve_key_info(key_h)
     try:
         await _enforce_rate_limit(key_h, rate_limit)

@@ -150,13 +150,26 @@ class OllamaProvider(LLMProvider):
         server = self._model_to_server.get(model)
         return server.url if server else settings.ollama_base_url
 
-    def _build_options(self, request: ChatCompletionRequest) -> dict:
+    @staticmethod
+    def _is_thinking_model(model: str) -> bool:
+        """Return True for models that use a chain-of-thought <think> phase before producing
+        visible content (e.g. deepseek-r1, qwq).  These need a larger token budget so the
+        thinking phase can complete before the actual answer is emitted."""
+        name = model.lower()
+        return any(k in name for k in ("deepseek-r1", "deepseek_r1", "qwq", "r1"))
+
+    def _build_options(self, request: ChatCompletionRequest, model: str = "") -> dict:
         """Build Ollama options dict from the request."""
+        # Thinking models (deepseek-r1, qwq) spend hundreds of tokens on internal
+        # reasoning before emitting any visible content.  Enforce a safe floor so they
+        # don't get cut off mid-think.
+        thinking = self._is_thinking_model(model)
+        min_tokens = 4096 if thinking else 512
         opts: dict = {
             # Keep model loaded indefinitely — eliminates cold-start reload delay.
             "keep_alive": -1,
             # Limit output to what was requested so Ollama doesn't over-generate.
-            "num_predict": request.max_tokens or 2048,
+            "num_predict": max(request.max_tokens or 2048, min_tokens),
         }
         if request.temperature is not None:
             opts["temperature"] = request.temperature
@@ -170,15 +183,20 @@ class OllamaProvider(LLMProvider):
         client, _ = self._get_client_for_model(model)
         messages = [{"role": m.role, "content": m.content or ""} for m in request.messages]
         payload = {"model": model, "messages": messages, "stream": False,
-                   "options": self._build_options(request)}
+                   "options": self._build_options(request, model)}
 
         resp = await client.post("/api/chat", json=payload)
         resp.raise_for_status()
         data = resp.json()
 
+        msg = data.get("message", {})
+        # Thinking models (deepseek-r1, qwq) emit reasoning in a separate `thinking`
+        # field and may leave `content` empty.  Fall back so callers always get text.
+        content = msg.get("content") or msg.get("thinking") or ""
+
         return ChatCompletionResponse(
             model=model,
-            choices=[Choice(message=ChoiceMessage(content=data["message"]["content"]))],
+            choices=[Choice(message=ChoiceMessage(content=content))],
             usage=Usage(
                 prompt_tokens=data.get("prompt_eval_count", 0),
                 completion_tokens=data.get("eval_count", 0),
@@ -195,7 +213,7 @@ class OllamaProvider(LLMProvider):
         client, _ = self._get_client_for_model(model)
         messages = [{"role": m.role, "content": m.content or ""} for m in request.messages]
         payload = {"model": model, "messages": messages, "stream": True,
-                   "options": self._build_options(request)}
+                   "options": self._build_options(request, model)}
         chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
         yield ChatCompletionChunk(
@@ -222,7 +240,10 @@ class OllamaProvider(LLMProvider):
                         ),
                     )
                     break
-                content = data.get("message", {}).get("content", "")
+                msg_chunk = data.get("message", {})
+                # Thinking models emit reasoning in `thinking`; surface it so the
+                # stream isn't empty while the model works through its chain-of-thought.
+                content = msg_chunk.get("content") or msg_chunk.get("thinking") or ""
                 if content:
                     yield ChatCompletionChunk(
                         id=chunk_id,
