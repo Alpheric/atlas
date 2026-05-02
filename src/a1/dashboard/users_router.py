@@ -153,7 +153,6 @@ async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
     )
     db.add(user)
     await db.commit()
-    await db.refresh(user)
     log.info(f"Created user {user.email} ({user.id})")
     return _user_dict(user, [], {"total_requests": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0})
 
@@ -192,7 +191,6 @@ async def update_user(user_id: str, body: UserUpdate, db: AsyncSession = Depends
                 update(ApiKey).where(ApiKey.user_id == user.id).values(is_active=False)
             )
     await db.commit()
-    await db.refresh(user)
     return {"ok": True, "user_id": str(user.id)}
 
 
@@ -283,7 +281,6 @@ async def create_api_key(user_id: str, body: KeyCreate, db: AsyncSession = Depen
     )
     db.add(api_key)
     await db.commit()
-    await db.refresh(api_key)
 
     log.info(f"Created API key '{body.name}' for user {user.email}")
 
