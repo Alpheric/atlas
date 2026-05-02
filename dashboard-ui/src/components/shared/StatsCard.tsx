@@ -1,4 +1,4 @@
-import { Card, Statistic } from 'antd';
+import { Badge, Card, Statistic } from 'antd';
 import type { CSSProperties, ReactNode } from 'react';
 
 interface StatsCardProps {
@@ -11,6 +11,8 @@ interface StatsCardProps {
   color?: string;
   style?: CSSProperties;
   hoverable?: boolean;
+  /** When true, renders a pulsing badge indicating live in-memory data is active */
+  live?: boolean;
 }
 
 /**
@@ -26,17 +28,28 @@ export default function StatsCard({
   color,
   style,
   hoverable = true,
+  live = false,
 }: StatsCardProps) {
   return (
     <Card size="small" hoverable={hoverable} style={style}>
-      <Statistic
-        title={title}
-        value={value}
-        prefix={icon}
-        suffix={suffix}
-        precision={precision}
-        valueStyle={color ? { color } : undefined}
-      />
+      <div style={{ position: 'relative' }}>
+        {live && (
+          <Badge
+            dot
+            status="processing"
+            style={{ position: 'absolute', top: 2, right: 0 }}
+            title="Live data since last restart"
+          />
+        )}
+        <Statistic
+          title={title}
+          value={value}
+          prefix={icon}
+          suffix={suffix}
+          precision={precision}
+          valueStyle={color ? { color } : undefined}
+        />
+      </div>
     </Card>
   );
 }

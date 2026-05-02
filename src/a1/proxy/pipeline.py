@@ -125,6 +125,11 @@ REFERENCE_COST_PER_1K_OUTPUT = 0.0006
 # Legacy model name aliases — applied once at request entry per handler
 LEGACY_ALIASES: dict[str, str] = {
     "alpheric-1": "atlas-plan",
+    # Cursor IDE / custom model name aliases
+    "Atlas": "atlas-plan",
+    "atlas": "atlas-plan",
+    "atlas-default": "atlas-plan",
+    "atlas-1": "atlas-plan",
 }
 
 

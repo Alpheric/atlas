@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import JSON as GenericJSON  # noqa: N811
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -123,6 +124,9 @@ class RoutingDecision(Base):
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("provider_accounts.id", ondelete="SET NULL"), nullable=True
     )
+    # Self-heal tracking
+    self_healed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    heal_score_before: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
 
     message: Mapped[Message] = relationship(back_populates="routing_decision")
@@ -181,6 +185,23 @@ class TrainingRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
 
 
+class User(Base):
+    """A named user who owns API keys and has usage tracked against them."""
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    email: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    role: Mapped[str] = mapped_column(String(32), default="developer")  # admin | developer | viewer
+    rate_limit: Mapped[int] = mapped_column(Integer, default=60)       # requests/min applied to all their keys
+    monthly_token_limit: Mapped[int] = mapped_column(Integer, default=0)  # 0 = unlimited
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+
+    api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+
 class ApiKey(Base):
     __tablename__ = "api_keys"
 
@@ -190,10 +211,17 @@ class ApiKey(Base):
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True
     )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
     role: Mapped[str] = mapped_column(String(32), default="developer")  # admin | developer | viewer
     is_active: Mapped[bool] = mapped_column(default=True)
     rate_limit: Mapped[int] = mapped_column(Integer, default=60)  # requests per minute
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+
+    user: Mapped["User | None"] = relationship(back_populates="api_keys")
 
 
 class ProviderAccount(Base):
@@ -306,6 +334,10 @@ class DualExecutionRecord(Base):
     similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0-1 cosine
     quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # auto-evaluated
     used_for_training: Mapped[bool] = mapped_column(default=False)
+
+    # Negative pair mining (contrast pairs)
+    is_contrast_pair: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    contrast_improved: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
 
@@ -440,6 +472,30 @@ class Channel(Base):
     team: Mapped[Team] = relationship(back_populates="channels")
 
 
+class ConversationHealth(Base):
+    """Per-conversation health score computed by the background health monitor.
+
+    Updated every ``health_monitor_interval_seconds`` (default 300s).
+    health_score: 0.0 (poor) → 1.0 (healthy)
+    flags: JSON object, e.g. {"stuck": true, "abandoned": false, "low_quality": true}
+    """
+
+    __tablename__ = "conversation_health"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    health_score: Mapped[float] = mapped_column(Float, default=1.0)
+    flags: Mapped[dict] = mapped_column(JSONB, default=dict)
+    avg_quality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    turn_count: Mapped[int] = mapped_column(Integer, default=0)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+
+
 # ---------------------------------------------------------------------------
 # Indexes
 Index("ix_dual_exec_task_type", DualExecutionRecord.task_type)
@@ -449,6 +505,7 @@ Index("ix_messages_conversation_seq", Message.conversation_id, Message.sequence)
 Index("ix_routing_decisions_created", RoutingDecision.created_at)
 Index("ix_routing_decisions_task_type", RoutingDecision.task_type)
 Index("ix_quality_signals_message", QualitySignal.message_id)
+Index("ix_conv_health_conversation", ConversationHealth.conversation_id)
 Index("ix_provider_accounts_provider", ProviderAccount.provider)
 Index("ix_usage_records_created", UsageRecord.created_at)
 Index("ix_usage_records_api_key_created", UsageRecord.api_key_hash, UsageRecord.created_at)

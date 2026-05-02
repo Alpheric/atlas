@@ -8,9 +8,7 @@ interface Props {
 export default function ProtectedRoute({ children }: Props) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
-  // If no auth configured (dev mode), allow access
-  // In production, the backend will return 401 for unauthenticated requests
-  if (!isAuthenticated && localStorage.getItem('a1-auth-required') === 'true') {
+  if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
 

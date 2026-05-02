@@ -847,10 +847,18 @@ async def _check_and_trigger_training(session: AsyncSession, task_type: str, sam
     from a1.db.repositories import DualExecutionRepo
 
     dual_repo = DualExecutionRepo(session)
-    training_records = await dual_repo.get_unused_for_training(task_type, limit=sample_count)
+    # Quality gate: only use samples meeting the distillation quality threshold
+    training_records = await dual_repo.get_unused_for_training(
+        task_type,
+        min_quality=settings.distillation_quality_threshold,
+        limit=sample_count,
+    )
     for rec in training_records:
         rec.used_for_training = True
-    log.info(f"Marked {len(training_records)} records as used_for_training for {task_type}")
+    log.info(
+        f"Marked {len(training_records)} records as used_for_training for {task_type}"
+        f" (quality_gate >= {settings.distillation_quality_threshold})"
+    )
 
     config = {
         "base_model": settings.training_base_model,

@@ -140,5 +140,12 @@ class Settings(BaseSettings):
     warm_up_models: list[str] = []
     reference_external_model: str = "gpt-4o-mini"
 
+    # Self-Heal Model
+    self_critique_enabled: bool = True
+    quality_min_score: float = 0.40           # below this → trigger self-critique
+    quality_critique_model: str = "claude-haiku-4-5"  # fast, cheap critique model
+    feedback_regen_enabled: bool = True       # thumbs-down triggers regeneration
+    health_monitor_interval_seconds: int = 300  # how often to scan conversations (seconds)
+
 
 settings = Settings()

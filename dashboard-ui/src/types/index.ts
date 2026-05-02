@@ -93,11 +93,96 @@ export interface MetricsSnapshot {
   savings_usd?: number;
 }
 
+export interface DbRecentRequest {
+  id: string;
+  provider: string;
+  model: string;
+  task_type: string | null;
+  strategy: string;
+  latency_ms: number;
+  cost_usd: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  is_local: boolean;
+  cache_hit: boolean;
+  error: string | null;
+  created_at: string | null;
+}
+
+export interface DbStats {
+  total_requests: number;
+  total_cost_usd: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  avg_latency_ms: number;
+  error_count: number;
+  local_count: number;
+  external_count: number;
+  local_pct: number;
+  self_healed_count: number;
+  provider_counts: Record<string, number>;
+  model_counts: Record<string, number>;
+  recent_requests: DbRecentRequest[];
+}
+
+export interface PoolAccountStatus {
+  user: string;
+  healthy: boolean;
+  cli_path: string;
+  sessions: number;
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+export interface DistillationTaskType {
+  task_type: string;
+  claude_samples: number;
+  training_threshold: number;
+  local_handoff_pct: number;
+  ready_for_training: boolean;
+  remaining: number;
+}
+
+export interface DistillationSummary {
+  enabled: boolean;
+  min_samples: number;
+  task_types: DistillationTaskType[];
+}
+
+export interface DailyStatPoint {
+  day: string;
+  requests: number;
+  cost_usd: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  avg_latency_ms: number;
+}
+
 export interface OverviewData {
   metrics: MetricsSnapshot;
   conversations_count: number;
   providers: Provider[];
   active_connections: number;
+  db_stats: DbStats;
+  pool_status: PoolAccountStatus[];
+  distillation_summary: DistillationSummary;
+}
+
+export interface ConversationHealthRecord {
+  conversation_id: string;
+  health_score: number;   // 0.0–1.0
+  flags: {
+    stuck: boolean;
+    abandoned: boolean;
+    low_quality: boolean;
+    self_healed: boolean;
+  };
+  avg_quality: number | null;
+  turn_count: number;
+  checked_at: string | null;
 }
 
 export interface Notification {

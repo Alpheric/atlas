@@ -93,10 +93,10 @@ async def lifespan(app: FastAPI):
 
     register_computer_tools()
 
-    # Periodic health refresh every 60 seconds (background)
+    # Periodic health refresh every 5 minutes (background)
     async def _health_refresh_loop():
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(300)
             try:
                 await provider_registry.refresh_health()
             except Exception as e:
@@ -156,10 +156,20 @@ async def lifespan(app: FastAPI):
 
         asyncio.create_task(_warm_up())
 
+    # Start conversation health monitor (background task, fire-and-forget)
+    from a1.healing.conversation_monitor import run_health_monitor
+
+    _monitor_task = asyncio.create_task(run_health_monitor())
+    _startup_log.info(
+        f"Conversation health monitor started "
+        f"(interval={settings.health_monitor_interval_seconds}s)"
+    )
+
     yield
 
     # Cleanup
     _health_task.cancel()
+    _monitor_task.cancel()
     from a1.dependencies import _arq_pool, _redis
 
     if _redis:

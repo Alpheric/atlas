@@ -375,7 +375,16 @@ async def responses_api(
             cost_usd=result.cost_usd,
             is_local=result.is_local,
             api_key_hash=api_key_hash,
+            self_healed=result.self_healed,
+            heal_score_before=result.quality_score if result.self_healed else None,
         )
+        # Fire-and-forget quality signal persist
+        if not result.cache_hit and result.quality_score > 0:
+            import asyncio as _asyncio
+            from a1.healing.quality_scorer import score_and_store as _score_and_store
+            _asyncio.create_task(
+                _score_and_store(result.assistant_text or "", result.task_type, str(asst_msg.id))
+            )
     except Exception as e:
         log.error(f"Failed to persist conversation: {e}")
 

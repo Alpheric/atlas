@@ -120,6 +120,11 @@ class CorePipelineResult:
     pii_masked: bool = False
     session_id: str | None = None
 
+    # Self-heal
+    quality_score: float = 0.0
+    self_healed: bool = False
+    original_response: str | None = None  # pre-critique text kept for audit
+
     # Error
     error: str | None = None
     error_type: str | None = None  # "provider_error", "internal_error", etc.
@@ -224,6 +229,44 @@ class CorePipeline:
                 from a1.security.pii_masker import pii_masker
 
                 result.assistant_text = pii_masker.unmask(result.assistant_text, mask_map)
+
+            # Step 7b: Quality score + self-critique gate (non-streaming, external provider only)
+            if result.assistant_text and not inp.stream and not result.cache_hit:
+                from a1.healing.quality_scorer import score_response
+
+                q_score = score_response(result.assistant_text, result.task_type)
+                result.quality_score = q_score
+
+                # Self-critique: replace response if score is below threshold
+                if (
+                    settings.self_critique_enabled
+                    and not result.is_local  # only critique external provider responses
+                    and q_score < settings.quality_min_score
+                ):
+                    from a1.healing.self_critique import self_critique
+
+                    critique_provider = provider_registry.get_provider("claude-cli")
+                    if critique_provider and provider_registry.is_healthy("claude-cli"):
+                        log.info(
+                            f"[self-heal] score={q_score:.3f} < {settings.quality_min_score}"
+                            f" task={result.task_type} — triggering self-critique"
+                        )
+                        improved = await self_critique(
+                            user_message=inp.raw_user_input or "",
+                            original_response=result.assistant_text,
+                            task_type=result.task_type,
+                            provider=critique_provider,
+                            model=settings.quality_critique_model,
+                        )
+                        if improved:
+                            result.original_response = result.assistant_text
+                            result.assistant_text = improved
+                            result.self_healed = True
+                            result.quality_score = score_response(improved, result.task_type)
+                            log.info(
+                                f"[self-heal] Response replaced "
+                                f"(score: {q_score:.3f} → {result.quality_score:.3f})"
+                            )
 
             # Step 8-12: Post-processing (cache store, session save, metrics, persist)
             result.latency_ms = int((time.time() - start_time) * 1000)

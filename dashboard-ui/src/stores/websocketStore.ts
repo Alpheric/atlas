@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useAuthStore } from './authStore';
 
 type EventCallback = (data: any) => void;
 
@@ -21,7 +22,10 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => ({
     if (state.ws) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/admin/ws/live-feed`);
+    // Include auth token as query param — browsers can't send headers on WS upgrade
+    const token = useAuthStore.getState().token;
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/admin/ws/live-feed${tokenParam}`);
 
     ws.onopen = () => set({ connected: true });
 

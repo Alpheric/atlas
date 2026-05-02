@@ -11,6 +11,8 @@ import {
   TeamOutlined,
   AppstoreOutlined,
   CodeOutlined,
+  UserOutlined,
+  MedicineBoxOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
@@ -19,8 +21,10 @@ import { ROLE_PAGE_ACCESS } from '../../lib/constants';
 const allItems = [
   { key: '/', icon: <DashboardOutlined />, label: 'Overview' },
   { key: '/conversations', icon: <MessageOutlined />, label: 'Conversations' },
+  { key: '/healing', icon: <MedicineBoxOutlined />, label: 'Self-Heal' },
   { key: '/routing', icon: <BranchesOutlined />, label: 'Routing' },
   { key: '/providers', icon: <CloudServerOutlined />, label: 'Providers' },
+  { key: '/users', icon: <UserOutlined />, label: 'Users' },
   { key: '/accounts', icon: <TeamOutlined />, label: 'Accounts' },
   { key: '/models', icon: <AppstoreOutlined />, label: 'Models' },
   { key: '/playground', icon: <CodeOutlined />, label: 'Playground' },

@@ -142,21 +142,36 @@ class ClaudeCLIProvider(LLMProvider):
             if os.path.isfile(match) and os.access(match, os.X_OK):
                 return match
 
-        # 3. Common PATH / Windows locations
-        candidates = [
-            shutil.which("claude"),
-            shutil.which("claude.cmd"),
-            os.path.join(effective_home, "AppData", "Roaming", "npm", "claude.cmd"),
-            os.path.join(effective_home, "AppData", "Roaming", "npm", "claude"),
-            "/usr/local/bin/claude",
-        ]
+        # 3. Common PATH / Windows locations.
+        #    For a different user's home, skip shutil.which — it reflects the *current*
+        #    user's PATH and would return a path like /home/neeraj/.local/bin/claude
+        #    that sudo cannot execute on behalf of the other user.  Instead check:
+        #      a) the target user's own ~/.local/bin/claude
+        #      b) well-known system-wide locations
+        is_other_user = home_dir and os.path.abspath(home_dir) != os.path.abspath(current_home)
+
+        if is_other_user:
+            candidates = [
+                os.path.join(effective_home, ".local", "bin", "claude"),
+                "/usr/local/bin/claude",
+                "/usr/bin/claude",
+                os.path.join(effective_home, "AppData", "Roaming", "npm", "claude.cmd"),
+                os.path.join(effective_home, "AppData", "Roaming", "npm", "claude"),
+            ]
+        else:
+            candidates = [
+                shutil.which("claude"),
+                shutil.which("claude.cmd"),
+                os.path.join(effective_home, "AppData", "Roaming", "npm", "claude.cmd"),
+                os.path.join(effective_home, "AppData", "Roaming", "npm", "claude"),
+                "/usr/local/bin/claude",
+            ]
         for path in candidates:
             if path and os.path.exists(path):
                 return path
 
-        # 4. For other-user accounts: fall back to current user's binary.
-        #    The binary is home-agnostic — it picks up credentials from $HOME at runtime.
-        if home_dir and os.path.abspath(home_dir) != os.path.abspath(current_home):
+        # 4. For other-user accounts: fall back to system-wide then current user's binary.
+        if is_other_user:
             exec_path = os.environ.get("CLAUDE_CODE_EXECPATH")
             if exec_path and os.path.isfile(exec_path) and os.access(exec_path, os.X_OK):
                 return exec_path

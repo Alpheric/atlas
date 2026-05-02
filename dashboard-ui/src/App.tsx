@@ -4,6 +4,7 @@ import AppLayout from './components/layout/AppLayout';
 import ErrorBoundary from './components/shared/ErrorBoundary';
 import PageSkeleton from './components/shared/PageSkeleton';
 import LoginPage from './components/auth/LoginPage';
+import ProtectedRoute from './components/auth/ProtectedRoute';
 
 // Lazy-load pages
 const Overview = React.lazy(() => import('./pages/Overview'));
@@ -18,6 +19,8 @@ const SettingsPage = React.lazy(() => import('./pages/Settings'));
 const Accounts = React.lazy(() => import('./pages/Accounts'));
 const Models = React.lazy(() => import('./pages/Models'));
 const Playground = React.lazy(() => import('./pages/Playground'));
+const Users = React.lazy(() => import('./pages/Users'));
+const Healing = React.lazy(() => import('./pages/Healing'));
 
 function PageWrapper({ children, skeleton }: { children: React.ReactNode; skeleton?: string }) {
   return (
@@ -36,22 +39,26 @@ export default function App() {
       <Route
         path="/*"
         element={
-          <AppLayout>
-            <Routes>
-              <Route path="/" element={<PageWrapper><Overview /></PageWrapper>} />
-              <Route path="/conversations" element={<PageWrapper skeleton="table"><Conversations /></PageWrapper>} />
-              <Route path="/conversations/:id" element={<PageWrapper skeleton="detail"><ConversationDetail /></PageWrapper>} />
-              <Route path="/routing" element={<PageWrapper skeleton="table"><Routing /></PageWrapper>} />
-              <Route path="/providers" element={<PageWrapper><Providers /></PageWrapper>} />
-              <Route path="/accounts" element={<PageWrapper skeleton="table"><Accounts /></PageWrapper>} />
-              <Route path="/models" element={<PageWrapper><Models /></PageWrapper>} />
-              <Route path="/training" element={<PageWrapper><Training /></PageWrapper>} />
-              <Route path="/analytics" element={<PageWrapper><Analytics /></PageWrapper>} />
-              <Route path="/import" element={<PageWrapper skeleton="form"><Import /></PageWrapper>} />
-              <Route path="/playground" element={<PageWrapper><Playground /></PageWrapper>} />
-              <Route path="/settings" element={<PageWrapper skeleton="form"><SettingsPage /></PageWrapper>} />
-            </Routes>
-          </AppLayout>
+          <ProtectedRoute>
+            <AppLayout>
+              <Routes>
+                <Route path="/" element={<PageWrapper><Overview /></PageWrapper>} />
+                <Route path="/conversations" element={<PageWrapper skeleton="table"><Conversations /></PageWrapper>} />
+                <Route path="/conversations/:id" element={<PageWrapper skeleton="detail"><ConversationDetail /></PageWrapper>} />
+                <Route path="/routing" element={<PageWrapper skeleton="table"><Routing /></PageWrapper>} />
+                <Route path="/providers" element={<PageWrapper><Providers /></PageWrapper>} />
+                <Route path="/accounts" element={<PageWrapper skeleton="table"><Accounts /></PageWrapper>} />
+                <Route path="/models" element={<PageWrapper><Models /></PageWrapper>} />
+                <Route path="/training" element={<PageWrapper><Training /></PageWrapper>} />
+                <Route path="/analytics" element={<PageWrapper><Analytics /></PageWrapper>} />
+                <Route path="/import" element={<PageWrapper skeleton="form"><Import /></PageWrapper>} />
+                <Route path="/playground" element={<PageWrapper><Playground /></PageWrapper>} />
+                <Route path="/settings" element={<PageWrapper skeleton="form"><SettingsPage /></PageWrapper>} />
+                <Route path="/users" element={<PageWrapper skeleton="table"><Users /></PageWrapper>} />
+                <Route path="/healing" element={<PageWrapper><Healing /></PageWrapper>} />
+              </Routes>
+            </AppLayout>
+          </ProtectedRoute>
         }
       />
     </Routes>

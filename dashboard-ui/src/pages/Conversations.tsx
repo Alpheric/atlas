@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Typography, Table, Tag, Input, Space, Card, Row, Col, Statistic, Badge, Button,
-  Tooltip, Segmented, Select,
+  Tooltip, Segmented, Select, Progress,
 } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import {
   MessageOutlined, UserOutlined, ClockCircleOutlined, ThunderboltOutlined,
   CloudServerOutlined, SearchOutlined, ReloadOutlined, RocketOutlined,
   BranchesOutlined, DatabaseOutlined, ExperimentOutlined, SafetyCertificateOutlined,
-  RobotOutlined,
+  RobotOutlined, WarningOutlined, CheckCircleOutlined,
+  CloseCircleOutlined, MedicineBoxOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip } from 'recharts';
-import { getConversations, getConversationStats, getDistillationOverview, getSessions } from '../lib/api';
+import { getConversations, getConversationStats, getDistillationOverview, getSessions, getConversationHealth } from '../lib/api';
 import ExportDropdown from '../components/shared/ExportDropdown';
 import DateRangeFilter from '../components/shared/DateRangeFilter';
 import dayjs from 'dayjs';
@@ -21,6 +22,38 @@ dayjs.extend(relativeTime);
 
 const { Search } = Input;
 const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#06b6d4'];
+
+/** Coloured health score pill — matches ConversationDetail style */
+function HealthBadge({ score, flags }: { score: number | null | undefined; flags?: any }) {
+  if (score == null) return <span style={{ color: '#4b5563', fontSize: 11 }}>—</span>;
+  const pct = Math.round(score * 100);
+  const color = pct >= 70 ? '#10b981' : pct >= 40 ? '#f59e0b' : '#ef4444';
+  const icon = pct >= 70 ? <CheckCircleOutlined /> : pct >= 40 ? <WarningOutlined /> : <CloseCircleOutlined />;
+  return (
+    <Tooltip
+      title={
+        flags ? (
+          <div style={{ fontSize: 11 }}>
+            {flags.stuck && <div>⚠ Stuck (repeated user messages)</div>}
+            {flags.abandoned && <div>⚠ Abandoned (no assistant reply)</div>}
+            {flags.low_quality && <div>⚠ Low quality responses</div>}
+            {flags.self_healed && <div>✓ Self-healed</div>}
+          </div>
+        ) : undefined
+      }
+    >
+      <Tag
+        icon={icon}
+        style={{
+          color, borderColor: color, background: `${color}18`,
+          fontSize: 10, cursor: flags ? 'help' : 'default', margin: 0,
+        }}
+      >
+        {pct}%
+      </Tag>
+    </Tooltip>
+  );
+}
 
 const SOURCE_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   proxy: { label: 'Proxy', color: 'blue', icon: <ThunderboltOutlined /> },
@@ -37,6 +70,7 @@ export default function Conversations() {
   const [stats, setStats] = useState<any>(null);
   const [distillation, setDistillation] = useState<any>(null);
   const [sessions, setSessions] = useState<any[]>([]);
+  const [healthData, setHealthData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -65,13 +99,15 @@ export default function Conversations() {
       getConversationStats().catch(() => null),
       getDistillationOverview().catch(() => null),
       getSessions().catch(() => ({ data: [] })),
+      getConversationHealth(200).catch(() => ({ data: [] })),
     ])
-      .then(([res, st, dist, sess]) => {
+      .then(([res, st, dist, sess, health]) => {
         setData(res.data || []);
         setTotal(res.total || 0);
         setStats(st);
         setDistillation(dist);
         setSessions(sess.data || []);
+        setHealthData(health.data || []);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -108,6 +144,21 @@ export default function Conversations() {
     (s: number, t: any) => s + (t.claude_samples || 0),
     0,
   );
+
+  // Health distribution from health data
+  const healthyCount = healthData.filter((h) => h.health_score >= 0.7).length;
+  const warningCount = healthData.filter((h) => h.health_score >= 0.4 && h.health_score < 0.7).length;
+  const criticalCount = healthData.filter((h) => h.health_score < 0.4).length;
+  const selfHealedCount = healthData.filter((h) => h.flags?.self_healed).length;
+  const avgHealthScore = healthData.length > 0
+    ? healthData.reduce((s, h) => s + h.health_score, 0) / healthData.length
+    : null;
+
+  // Build a quick lookup map: conv_id → health record (from the health endpoint)
+  // The list endpoint already has health_score on each row, so we use that directly.
+  // healthMap is only needed for flags on rows where the list endpoint may not return them.
+  const healthMap: Record<string, any> = {};
+  healthData.forEach((h) => { healthMap[h.conversation_id] = h; });
 
   const columns: ColumnsType<any> = [
     {
@@ -147,6 +198,28 @@ export default function Conversations() {
           {row.task_type && <Tag color="gold" style={{ fontSize: 9, margin: 0 }}>{row.task_type}</Tag>}
         </Space>
       ) : <span style={{ color: '#4b5563', fontSize: 11 }}>—</span>,
+    },
+    {
+      title: 'Health', key: 'health', width: 100,
+      sorter: (a: any, b: any) => {
+        const sa = a.health_score ?? -1;
+        const sb = b.health_score ?? -1;
+        return sa - sb;
+      },
+      render: (_: any, row: any) => {
+        const h = healthMap[row.id];
+        return (
+          <Space size={3} direction="vertical" style={{ gap: 2 }}>
+            <HealthBadge score={row.health_score ?? h?.health_score} flags={row.health_flags ?? h?.flags} />
+            {(row.health_flags ?? h?.flags)?.stuck && (
+              <Tag color="orange" style={{ fontSize: 9, margin: 0 }}>stuck</Tag>
+            )}
+            {(row.health_flags ?? h?.flags)?.self_healed && (
+              <Tag color="purple" style={{ fontSize: 9, margin: 0 }}>healed</Tag>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: 'Created', dataIndex: 'created_at', width: 150,
@@ -209,8 +282,8 @@ export default function Conversations() {
         </Space>
       </div>
 
-      {/* KPI Cards */}
-      <Row gutter={[10, 10]} style={{ marginBottom: 12 }}>
+      {/* KPI Cards — row 1: conversation stats */}
+      <Row gutter={[10, 10]} style={{ marginBottom: 8 }}>
         {[
           { title: 'Conversations', value: stats?.total_conversations ?? total, icon: <MessageOutlined />, color: '#3b82f6' },
           { title: 'Messages', value: stats?.total_messages ?? 0, icon: <ThunderboltOutlined />, color: '#8b5cf6' },
@@ -228,6 +301,86 @@ export default function Conversations() {
           </Col>
         ))}
       </Row>
+
+      {/* KPI Cards — row 2: health distribution */}
+      {healthData.length > 0 && (
+        <Row gutter={[10, 10]} style={{ marginBottom: 12 }}>
+          <Col xs={12} sm={6} md={3}>
+            <Card size="small" hoverable style={{ borderColor: '#10b98133' }}>
+              <Statistic
+                title={<span style={{ fontSize: 11 }}>Healthy</span>}
+                value={healthyCount}
+                prefix={<CheckCircleOutlined />}
+                valueStyle={{ color: '#10b981', fontSize: 18 }}
+                suffix={<span style={{ fontSize: 10, color: '#4b5563' }}>/ {healthData.length}</span>}
+              />
+            </Card>
+          </Col>
+          <Col xs={12} sm={6} md={3}>
+            <Card size="small" hoverable style={{ borderColor: '#f59e0b33' }}>
+              <Statistic
+                title={<span style={{ fontSize: 11 }}>Warning</span>}
+                value={warningCount}
+                prefix={<WarningOutlined />}
+                valueStyle={{ color: '#f59e0b', fontSize: 18 }}
+                suffix={<span style={{ fontSize: 10, color: '#4b5563' }}>/ {healthData.length}</span>}
+              />
+            </Card>
+          </Col>
+          <Col xs={12} sm={6} md={3}>
+            <Card size="small" hoverable style={{ borderColor: '#ef444433' }}>
+              <Statistic
+                title={<span style={{ fontSize: 11 }}>Critical</span>}
+                value={criticalCount}
+                prefix={<CloseCircleOutlined />}
+                valueStyle={{ color: '#ef4444', fontSize: 18 }}
+                suffix={<span style={{ fontSize: 10, color: '#4b5563' }}>/ {healthData.length}</span>}
+              />
+            </Card>
+          </Col>
+          <Col xs={12} sm={6} md={3}>
+            <Card size="small" hoverable style={{ borderColor: '#a855f733' }}>
+              <Statistic
+                title={<span style={{ fontSize: 11 }}>Self-Healed</span>}
+                value={selfHealedCount}
+                prefix={<MedicineBoxOutlined />}
+                valueStyle={{ color: '#a855f7', fontSize: 18 }}
+              />
+            </Card>
+          </Col>
+          <Col xs={24} sm={12} md={8}>
+            <Card size="small" title={<span style={{ fontSize: 11 }}>Avg Health Score</span>}>
+              {avgHealthScore != null ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <Progress
+                    type="circle"
+                    percent={Math.round(avgHealthScore * 100)}
+                    size={48}
+                    strokeColor={avgHealthScore >= 0.7 ? '#10b981' : avgHealthScore >= 0.4 ? '#f59e0b' : '#ef4444'}
+                    format={(p) => <span style={{ fontSize: 11, color: '#e5e7eb' }}>{p}%</span>}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span style={{ fontSize: 10, color: '#10b981' }}>Healthy</span>
+                      <span style={{ fontSize: 10, color: '#10b981' }}>{healthyCount}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span style={{ fontSize: 10, color: '#f59e0b' }}>Warning</span>
+                      <span style={{ fontSize: 10, color: '#f59e0b' }}>{warningCount}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 10, color: '#ef4444' }}>Critical</span>
+                      <span style={{ fontSize: 10, color: '#ef4444' }}>{criticalCount}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <span style={{ fontSize: 11, color: '#4b5563' }}>No health data yet</span>
+              )}
+            </Card>
+          </Col>
+        </Row>
+      )}
 
       {/* Source Distribution + View Toggle */}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>

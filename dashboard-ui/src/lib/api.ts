@@ -55,10 +55,16 @@ export const getConversation = (id: string) =>
 export const getConversationStats = () =>
   api.get('/admin/conversations/stats').then((r) => r.data);
 
+export const getConversationHealth = (limit = 50) =>
+  api.get('/admin/conversations/health', { params: { limit } }).then((r) => r.data);
+
 export const addFeedback = (convId: string, messageId: string, value: number) =>
   api.post(`/admin/conversations/${convId}/feedback`, null, {
     params: { message_id: messageId, value },
   }).then((r) => r.data);
+
+export const regenerateMessage = (convId: string, msgId: string) =>
+  api.post(`/admin/conversations/${convId}/messages/${msgId}/regenerate`).then((r) => r.data);
 
 // --- Routing ---
 export const getRoutingDecisions = (params: {
@@ -155,8 +161,29 @@ export const getOllamaModels = () => api.get('/admin/ollama/models').then((r) =>
 // --- Accounts ---
 export const getAccounts = () => api.get('/admin/accounts').then((r) => r.data);
 
+// --- Users ---
+export const getUsers = () => api.get('/admin/users').then((r) => r.data);
+export const getUser = (id: string) => api.get(`/admin/users/${id}`).then((r) => r.data);
+export const createUser = (data: {
+  name: string; email: string; role?: string; rate_limit?: number; monthly_token_limit?: number;
+}) => api.post('/admin/users', data).then((r) => r.data);
+export const updateUser = (id: string, data: {
+  name?: string; role?: string; rate_limit?: number; monthly_token_limit?: number; is_active?: boolean;
+}) => api.patch(`/admin/users/${id}`, data).then((r) => r.data);
+export const deleteUser = (id: string) => api.delete(`/admin/users/${id}`).then((r) => r.data);
+export const getUserUsage = (id: string) => api.get(`/admin/users/${id}/usage`).then((r) => r.data);
+export const createApiKey = (userId: string, data: {
+  name: string; rate_limit?: number; expires_at?: string;
+}) => api.post(`/admin/users/${userId}/keys`, data).then((r) => r.data);
+export const revokeApiKey = (userId: string, keyId: string) =>
+  api.delete(`/admin/users/${userId}/keys/${keyId}`).then((r) => r.data);
+export const toggleApiKey = (userId: string, keyId: string, is_active: boolean) =>
+  api.patch(`/admin/users/${userId}/keys/${keyId}`, { is_active }).then((r) => r.data);
+
 // --- Analytics ---
 export const getLocalVsExternal = () => api.get('/admin/analytics/local-vs-external').then((r) => r.data);
+export const getDailyStats = (days = 7) =>
+  api.get('/admin/analytics/daily-stats', { params: { days } }).then((r) => r.data);
 export const getLatencyAnalytics = () => api.get('/admin/analytics/latency').then((r) => r.data);
 
 export default api;

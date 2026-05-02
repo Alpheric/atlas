@@ -157,6 +157,8 @@ class RoutingRepo:
         api_key_hash: str | None = None,
         cache_hit: bool = False,
         account_id: uuid.UUID | None = None,
+        self_healed: bool = False,
+        heal_score_before: float | None = None,
     ) -> RoutingDecision:
         decision = RoutingDecision(
             message_id=message_id,
@@ -175,6 +177,8 @@ class RoutingRepo:
             api_key_hash=api_key_hash,
             cache_hit=cache_hit,
             account_id=account_id,
+            self_healed=self_healed,
+            heal_score_before=heal_score_before,
         )
         self.session.add(decision)
         await self.session.flush()
@@ -282,18 +286,28 @@ class DualExecutionRepo:
         return list(result.scalars().all())
 
     async def get_unused_for_training(
-        self, task_type: str, min_quality: float = 0.7, limit: int = 10000
+        self, task_type: str, min_quality: float = 0.0, limit: int = 10000
     ) -> list[DualExecutionRecord]:
-        stmt = (
-            select(DualExecutionRecord)
-            .where(
-                DualExecutionRecord.task_type == task_type,
-                DualExecutionRecord.similarity_score.isnot(None),
-                DualExecutionRecord.used_for_training.is_(False),
-            )
-            .order_by(DualExecutionRecord.created_at.desc())
-            .limit(limit)
+        """Return unused training records, optionally filtered by quality_score.
+
+        Args:
+            task_type:   Task type to fetch records for.
+            min_quality: Minimum quality_score to include (0.0 = no filter).
+                         Set to ``settings.distillation_quality_threshold`` to enforce
+                         the quality gate on training data.
+            limit:       Maximum records to return.
+        """
+        stmt = select(DualExecutionRecord).where(
+            DualExecutionRecord.task_type == task_type,
+            DualExecutionRecord.similarity_score.isnot(None),
+            DualExecutionRecord.used_for_training.is_(False),
         )
+        if min_quality > 0.0:
+            stmt = stmt.where(
+                (DualExecutionRecord.quality_score >= min_quality)
+                | DualExecutionRecord.quality_score.is_(None)
+            )
+        stmt = stmt.order_by(DualExecutionRecord.created_at.desc()).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

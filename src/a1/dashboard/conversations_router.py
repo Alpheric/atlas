@@ -41,6 +41,9 @@ async def list_conversations(
     source: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
+    from sqlalchemy import select
+    from a1.db.models import ConversationHealth
+
     repo = ConversationRepo(db)
     conversations = await repo.list_recent(
         limit=limit,
@@ -51,6 +54,17 @@ async def list_conversations(
         source=source,
     )
     total = await repo.count(search=search, date_from=date_from, date_to=date_to, source=source)
+
+    # Batch-load health scores for all returned conversations
+    conv_ids = [c.id for c in conversations]
+    health_map: dict = {}
+    if conv_ids:
+        health_rows = await db.execute(
+            select(ConversationHealth).where(ConversationHealth.conversation_id.in_(conv_ids))
+        )
+        for h in health_rows.scalars().all():
+            health_map[h.conversation_id] = h
+
     return {
         "data": [
             {
@@ -64,6 +78,8 @@ async def list_conversations(
                 "task_type": _conv_latest_routing(c)[1],
                 "created_at": c.created_at.isoformat() if c.created_at else None,
                 "metadata": c.metadata_,
+                "health_score": health_map[c.id].health_score if c.id in health_map else None,
+                "health_flags": health_map[c.id].flags if c.id in health_map else None,
             }
             for c in conversations
         ],
@@ -130,14 +146,53 @@ async def conversation_stats(db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.get("/conversations/health")
+async def list_conversation_health(
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return conversation health scores for the dashboard list view.
+
+    Returns the most recent ``limit`` health records sorted by health_score ascending
+    (worst conversations first — most actionable).
+    """
+    from sqlalchemy import select
+
+    from a1.db.models import ConversationHealth
+
+    result = await db.execute(
+        select(ConversationHealth)
+        .order_by(ConversationHealth.health_score.asc())
+        .limit(limit)
+    )
+    rows = result.scalars().all()
+    return {
+        "data": [
+            {
+                "conversation_id": str(r.conversation_id),
+                "health_score": r.health_score,
+                "flags": r.flags,
+                "avg_quality": r.avg_quality,
+                "turn_count": r.turn_count,
+                "checked_at": r.checked_at.isoformat() if r.checked_at else None,
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    }
+
+
 @router.get("/conversations/{conv_id}")
 async def get_conversation(conv_id: str, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+    from a1.db.models import ConversationHealth
+
     repo = ConversationRepo(db)
     conv = await repo.get(uuid.UUID(conv_id))
     if not conv:
         raise HTTPException(404, "Conversation not found")
 
-    # Aggregate cost/token totals across all routing decisions
+    # Aggregate cost/token totals + self-heal stats
     total_prompt_tokens = sum(
         m.routing_decision.prompt_tokens or 0 for m in conv.messages if m.routing_decision
     )
@@ -147,6 +202,24 @@ async def get_conversation(conv_id: str, db: AsyncSession = Depends(get_db)):
     total_cost_usd = sum(
         float(m.routing_decision.cost_usd) for m in conv.messages if m.routing_decision
     )
+    healed_count = sum(
+        1 for m in conv.messages if m.routing_decision and m.routing_decision.self_healed
+    )
+
+    # Load conversation health record
+    health_row = await db.execute(
+        select(ConversationHealth).where(
+            ConversationHealth.conversation_id == conv.id
+        )
+    )
+    health = health_row.scalar_one_or_none()
+
+    def _quality_score(msg) -> float | None:
+        """Return the latest auto_eval quality score for a message, or None."""
+        signals = [s for s in (msg.quality_signals or []) if s.signal_type == "auto_eval"]
+        if signals:
+            return round(sorted(signals, key=lambda s: s.created_at)[-1].value, 3)
+        return None
 
     return {
         "id": str(conv.id),
@@ -157,6 +230,14 @@ async def get_conversation(conv_id: str, db: AsyncSession = Depends(get_db)):
         "total_prompt_tokens": total_prompt_tokens,
         "total_completion_tokens": total_completion_tokens,
         "total_cost_usd": round(total_cost_usd, 6),
+        "healed_count": healed_count,
+        "health": {
+            "score": health.health_score,
+            "flags": health.flags,
+            "avg_quality": health.avg_quality,
+            "turn_count": health.turn_count,
+            "checked_at": health.checked_at.isoformat() if health.checked_at else None,
+        } if health else None,
         "messages": [
             {
                 "id": str(m.id),
@@ -166,6 +247,7 @@ async def get_conversation(conv_id: str, db: AsyncSession = Depends(get_db)):
                 "token_count": m.token_count,
                 "sequence": m.sequence,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
+                "quality_score": _quality_score(m),
                 "routing_decision": {
                     "provider": m.routing_decision.provider,
                     "model": m.routing_decision.model,
@@ -175,6 +257,11 @@ async def get_conversation(conv_id: str, db: AsyncSession = Depends(get_db)):
                     "cost_usd": float(m.routing_decision.cost_usd),
                     "prompt_tokens": m.routing_decision.prompt_tokens,
                     "completion_tokens": m.routing_decision.completion_tokens,
+                    "self_healed": m.routing_decision.self_healed,
+                    "heal_score_before": m.routing_decision.heal_score_before,
+                    "is_local": m.routing_decision.is_local,
+                    "cache_hit": m.routing_decision.cache_hit,
+                    "error": m.routing_decision.error,
                 }
                 if m.routing_decision
                 else None,
@@ -183,8 +270,9 @@ async def get_conversation(conv_id: str, db: AsyncSession = Depends(get_db)):
                         "type": s.signal_type,
                         "value": s.value,
                         "evaluator": s.evaluator,
+                        "created_at": s.created_at.isoformat() if s.created_at else None,
                     }
-                    for s in (m.quality_signals or [])
+                    for s in sorted(m.quality_signals or [], key=lambda s: s.created_at)
                 ],
             }
             for m in sorted(conv.messages, key=lambda x: x.sequence)
@@ -200,6 +288,8 @@ async def add_feedback(
     value: float = 1.0,
     db: AsyncSession = Depends(get_db),
 ):
+    import asyncio
+
     repo = QualityRepo(db)
     signal = await repo.add_signal(
         message_id=uuid.UUID(message_id),
@@ -207,7 +297,40 @@ async def add_feedback(
         value=value,
         evaluator="user:dashboard",
     )
+
+    # Thumbs-down (value <= -1 or value < 0.5 for thumbs type) → regenerate
+    if signal_type == "thumbs" and value < 0.5 and settings.feedback_regen_enabled:
+        from a1.healing.feedback_handler import handle_thumbs_down
+
+        asyncio.create_task(
+            handle_thumbs_down(conv_id, message_id)
+        )
+
     return {"id": str(signal.id), "status": "recorded"}
+
+
+# --- Manual Regenerate ---
+@router.post("/conversations/{conv_id}/messages/{msg_id}/regenerate")
+async def regenerate_message(
+    conv_id: str,
+    msg_id: str,
+):
+    """Manually trigger regeneration for a specific assistant message.
+
+    This calls the same feedback handler as thumbs-down, without recording
+    a quality signal. Useful for dashboard "Regenerate" buttons.
+    Returns immediately; the improved message appears asynchronously.
+    """
+    import asyncio
+
+    if not settings.feedback_regen_enabled:
+        from fastapi import HTTPException
+        raise HTTPException(503, "Feedback regeneration is disabled (A1_FEEDBACK_REGEN_ENABLED=false)")
+
+    from a1.healing.feedback_handler import handle_thumbs_down
+
+    asyncio.create_task(handle_thumbs_down(conv_id, msg_id))
+    return {"status": "regeneration_started", "message_id": msg_id}
 
 
 # --- Sessions ---

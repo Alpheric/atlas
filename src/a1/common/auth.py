@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from a1.common.logging import get_logger
 from a1.db.engine import async_session
-from a1.db.models import ApiKey
+from a1.db.models import ApiKey  # noqa: F401 — also used in _verify_key_in_db
 from config.settings import settings
 
 log = get_logger("auth")
@@ -152,10 +152,44 @@ async def _enforce_rate_limit(key_hash: str, rate_limit: int) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _verify_key_in_db(key_hash: str) -> bool:
+    """Check if a key hash exists and is active in the api_keys table."""
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                select(ApiKey.id).where(ApiKey.key_hash == key_hash, ApiKey.is_active.is_(True))
+            )
+            return result.first() is not None
+    except Exception as e:
+        log.debug(f"DB key check failed: {e}")
+        return False
+
+
+async def _update_key_last_used(key_hash: str) -> None:
+    """Update last_used_at timestamp on the api_key record."""
+    try:
+        from sqlalchemy import update as sa_update
+        from a1.common.tz import now_ist
+        async with async_session() as session:
+            async with session.begin():
+                await session.execute(
+                    sa_update(ApiKey)
+                    .where(ApiKey.key_hash == key_hash)
+                    .values(last_used_at=now_ist())
+                )
+    except Exception:
+        pass  # non-critical
+
+
 async def verify_api_key(
     credentials: HTTPAuthorizationCredentials | None = Security(security),
 ) -> str:
-    """Verify API key from Bearer token and enforce rate limits. Returns the raw key."""
+    """Verify API key from Bearer token and enforce rate limits. Returns the raw key.
+
+    Accepts keys from two sources (in priority order):
+      1. settings.api_keys — env-var master keys (admin access, always accepted)
+      2. api_keys DB table — per-user keys created via the dashboard
+    """
     if not settings.api_keys:
         return "dev"
 
@@ -163,10 +197,16 @@ async def verify_api_key(
         raise HTTPException(status_code=401, detail="Missing API key")
 
     key = credentials.credentials
-    if key not in settings.api_keys:
-        raise HTTPException(status_code=403, detail="Invalid API key")
-
     key_h = hash_key(key)
+
+    if key not in settings.api_keys:
+        # Not a master key — check DB for a user-created key
+        if not await _verify_key_in_db(key_h):
+            raise HTTPException(status_code=403, detail="Invalid API key")
+        # Valid DB key — update last_used timestamp in background
+        import asyncio
+        asyncio.create_task(_update_key_last_used(key_h))
+
     _, _, rate_limit = await _resolve_key_info(key_h)
     await _enforce_rate_limit(key_h, rate_limit)
 

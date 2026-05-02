@@ -102,6 +102,7 @@ class TestCorePipelineExecution:
         mock_settings.distillation_task_repeat_threshold = 0
         mock_settings.planning_max_depth = 3
         mock_settings.planning_max_workers = 5
+        mock_settings.self_critique_enabled = False  # disable in unit tests
         mock_select.return_value = ("test-model", "test-provider")
         mock_registry.get_provider.return_value = mock_provider
         mock_registry.healthy_providers = {"test-provider": mock_provider}
@@ -125,6 +126,7 @@ class TestCorePipelineExecution:
         mock_settings.distillation_task_repeat_threshold = 0
         mock_settings.planning_max_depth = 3
         mock_settings.planning_max_workers = 5
+        mock_settings.self_critique_enabled = False  # disable in unit tests
 
         # No providers available
         with patch("a1.proxy.core_pipeline.provider_registry") as mock_reg:

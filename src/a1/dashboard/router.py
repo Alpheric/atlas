@@ -25,6 +25,7 @@ from a1.dashboard.governance_router import router as governance
 from a1.dashboard.plans_router import router as plans
 from a1.dashboard.providers_router import router as providers
 from a1.dashboard.training_router import router as training
+from a1.dashboard.users_router import router as users
 from config.settings import settings
 
 # Public routes (auth/login must be reachable without a token).
@@ -41,6 +42,7 @@ router.include_router(providers)
 router.include_router(agents)
 router.include_router(plans)
 router.include_router(governance)
+router.include_router(users)
 
 # WebSocket route is registered separately (no router-level dep) because browsers
 # cannot send Authorization headers during a WebSocket upgrade. Auth is enforced
