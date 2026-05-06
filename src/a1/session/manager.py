@@ -44,6 +44,33 @@ class Session:
     last_activity: float = field(default_factory=time.time)
     metadata: dict = field(default_factory=dict)
 
+    # ── Routing stickiness state ───────────────────────────────────────────
+    # Persisted across turns so the pipeline can re-use the same model.
+    primary_model: str | None = None       # e.g. "atlas-plan" or "claude-sonnet-4-20250514"
+    primary_provider: str | None = None    # e.g. "claude-cli" or "vertex"
+    primary_task_type: str | None = None   # e.g. "planning", "coding"
+    routing_mode: str = "balanced"         # quality / balanced / low_cost / local_first
+    fallback_count: int = 0                # how many times we've fallen back this session
+
+    def set_routing(self, model: str, provider: str, task_type: str) -> None:
+        """Record the primary model chosen this turn (called after first successful response)."""
+        self.primary_model = model
+        self.primary_provider = provider
+        self.primary_task_type = task_type
+        self.last_activity = time.time()
+
+    def record_fallback(self, new_model: str, new_provider: str, reason: str) -> None:
+        """Record a mid-session fallback. Called by the pipeline on failure."""
+        self.fallback_count += 1
+        self.primary_model = new_model
+        self.primary_provider = new_provider
+        self.metadata[f"fallback_{self.fallback_count}"] = {
+            "model": new_model,
+            "provider": new_provider,
+            "reason": reason,
+            "at": time.time(),
+        }
+
     def add_message(self, role: str, content: str, response_id: str | None = None):
         self.messages.append(
             SessionMessage(
@@ -78,6 +105,12 @@ class Session:
             "created_at": self.created_at,
             "last_activity": self.last_activity,
             "metadata": self.metadata,
+            # Routing stickiness
+            "primary_model": self.primary_model,
+            "primary_provider": self.primary_provider,
+            "primary_task_type": self.primary_task_type,
+            "routing_mode": self.routing_mode,
+            "fallback_count": self.fallback_count,
         }
 
     @classmethod
@@ -89,6 +122,12 @@ class Session:
             last_activity=data.get("last_activity", time.time()),
             metadata=data.get("metadata", {}),
         )
+        # Routing stickiness
+        s.primary_model = data.get("primary_model")
+        s.primary_provider = data.get("primary_provider")
+        s.primary_task_type = data.get("primary_task_type")
+        s.routing_mode = data.get("routing_mode", "balanced")
+        s.fallback_count = data.get("fallback_count", 0)
         for m in data.get("messages", []):
             s.messages.append(
                 SessionMessage(

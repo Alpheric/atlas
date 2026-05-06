@@ -57,6 +57,7 @@ function HealthBadge({ score, flags }: { score: number | null | undefined; flags
 
 const SOURCE_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   proxy: { label: 'Proxy', color: 'blue', icon: <ThunderboltOutlined /> },
+  onedesk: { label: 'OneDesk', color: 'geekblue', icon: <CloudServerOutlined /> },
   'import:paperclip': { label: 'Paperclip', color: 'purple', icon: <DatabaseOutlined /> },
   'import:openai_jsonl': { label: 'JSONL', color: 'orange', icon: <DatabaseOutlined /> },
   openclaw: { label: 'OpenClaw', color: 'cyan', icon: <CloudServerOutlined /> },

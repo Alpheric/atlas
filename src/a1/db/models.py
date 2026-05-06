@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON as GenericJSON  # noqa: N811
 from sqlalchemy import (
     Boolean,
@@ -127,6 +128,9 @@ class RoutingDecision(Base):
     # Self-heal tracking
     self_healed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     heal_score_before: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Vertex AI / Gemini web search grounding
+    web_search_grounded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    grounding_metadata: Mapped[str | None] = mapped_column(Text, nullable=True)   # JSON
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
 
     message: Mapped[Message] = relationship(back_populates="routing_decision")
@@ -338,6 +342,13 @@ class DualExecutionRecord(Base):
     # Negative pair mining (contrast pairs)
     is_contrast_pair: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     contrast_improved: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Web-grounded RAG training data
+    # True when the teacher answer was grounded in web search results.
+    # RAG pairs are stored for fine-tuning the local model to cite sources,
+    # but are excluded from fast-changing fact training to avoid stale data.
+    has_web_context: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    web_search_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
 
@@ -658,6 +669,74 @@ class AgentExecution(Base):
     agent: Mapped[Agent] = relationship(back_populates="executions")
 
 
+# ── Provisioning: OneDesk / platform-to-platform tenant keys ─────────────────
+
+
+class AtlasApiKey(Base):
+    """Tenant-specific API keys provisioned via the OneDesk provisioning API.
+
+    Raw keys are NEVER stored — only the SHA-256 hash and a display prefix.
+    """
+
+    __tablename__ = "atlas_api_keys"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active','disabled','revoked')", name="chk_atlas_key_status"
+        ),
+        Index("ix_atlas_api_keys_tenant_id", "tenant_id"),
+        Index("ix_atlas_api_keys_key_hash", "key_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Tenant identity (from OneDesk)
+    tenant_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    tenant_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    tenant_owner_email: Mapped[str] = mapped_column(String(256), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), default="onedesk")  # which platform provisioned
+    # Key material — raw key NEVER stored
+    key_prefix: Mapped[str] = mapped_column(String(20), nullable=False)   # e.g. "sk-atlas-a1b2c3"
+    key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)  # SHA-256
+    # Lifecycle
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active | disabled | revoked
+    default_model: Mapped[str] = mapped_column(String(128), default="Atlas")
+    base_url: Mapped[str] = mapped_column(String(512), default="https://atlas.alpheric.ai/v1")
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Usage counters (incremented on each chat completion)
+    requests_total: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_total: Mapped[int] = mapped_column(Integer, default=0)
+    # Flexible metadata blob (reason for rotation, notes, etc.)
+    metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class ProvisioningAuditLog(Base):
+    """Immutable audit trail for every provisioning action.
+
+    No secrets stored — key_hash is safe to log; raw keys are never written.
+    """
+
+    __tablename__ = "provisioning_audit_logs"
+    __table_args__ = (
+        Index("ix_prov_audit_tenant_id", "tenant_id"),
+        Index("ix_prov_audit_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    alpheric_key_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # UUID as str
+    action: Mapped[str] = mapped_column(String(64), nullable=False)   # provisioned | rotated | disabled | status_checked | invalid_token | disabled_key_used | chat_completion
+    status: Mapped[str] = mapped_column(String(16), nullable=False)   # success | failure
+    safe_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)   # SHA-256 of client IP
+    user_agent_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+
+
 # ---------------------------------------------------------------------------
 # Organizational Platform — P3 schema (task plans / channel members)
 # ---------------------------------------------------------------------------
@@ -965,3 +1044,223 @@ Index("ix_audit_events_workspace", AuditEvent.workspace_id)
 Index("ix_audit_events_created", AuditEvent.created_at)
 Index("ix_audit_events_entity", AuditEvent.entity_type)
 Index("ix_workspace_budgets_workspace", WorkspaceBudget.workspace_id)
+
+
+# ---------------------------------------------------------------------------
+# Web Search Layer — P5 schema
+# ---------------------------------------------------------------------------
+
+
+class WebSearchRun(Base):
+    """One web search query execution — the top-level record for a search event.
+
+    Stores the PII-masked query, which provider answered it, result count,
+    latency, and whether it was blocked before sending to the search API.
+    """
+
+    __tablename__ = "web_search_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True
+    )
+    # PII-safe query (masker applied before storage)
+    query_masked: Mapped[str] = mapped_column(Text, nullable=False)
+    # SHA-256 prefix of the original query for deduplication analytics (not reversible)
+    query_raw_hash: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_count: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), default=0.0)
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    block_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    search_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)  # "high_intent", etc.
+    atlas_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+
+    results: Mapped[list["WebSearchResult"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+    citations: Mapped[list["WebCitation"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+
+
+class WebSearchResult(Base):
+    """Individual search result returned by a search provider.
+
+    One WebSearchRun → N WebSearchResults (typically 3-10).
+    """
+
+    __tablename__ = "web_search_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("web_search_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_date: Mapped[str | None] = mapped_column(String(32), nullable=True)  # ISO date
+    source: Mapped[str | None] = mapped_column(String(256), nullable=True)   # domain
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    was_extracted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+
+    run: Mapped[WebSearchRun] = relationship(back_populates="results")
+    extracted_page: Mapped["WebExtractedPage | None"] = relationship(
+        back_populates="result", uselist=False
+    )
+
+
+class WebExtractedPage(Base):
+    """Cleaned page content fetched from a search result URL.
+
+    Stored for analytics and as RAG training data.
+    """
+
+    __tablename__ = "web_extracted_pages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    result_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("web_search_results.id", ondelete="CASCADE"), nullable=False
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    # Truncated page content (~500 words) used as LLM grounding context
+    content_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    extraction_ok: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+
+    result: Mapped[WebSearchResult] = relationship(back_populates="extracted_page")
+
+
+class WebCitation(Base):
+    """A verifiable source linked to an LLM response.
+
+    Created after the LLM responds so we can detect which [N] markers were used.
+    Tied back to the WebSearchRun for analytics.
+    """
+
+    __tablename__ = "web_citations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("web_search_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    routing_decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("routing_decisions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+    claim_supported: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    run: Mapped[WebSearchRun] = relationship(back_populates="citations")
+
+
+# Web Search Indexes
+Index("ix_web_search_runs_workspace", WebSearchRun.workspace_id)
+Index("ix_web_search_runs_created", WebSearchRun.created_at)
+Index("ix_web_search_runs_provider", WebSearchRun.provider)
+Index("ix_web_search_results_run", WebSearchResult.run_id)
+Index("ix_web_extracted_pages_result", WebExtractedPage.result_id)
+Index("ix_web_citations_run", WebCitation.run_id)
+Index("ix_web_citations_routing", WebCitation.routing_decision_id)
+
+
+class UploadedFile(Base):
+    """Stores metadata for files uploaded via POST /v1/files."""
+
+    __tablename__ = "uploaded_files"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # "file-<hex>"
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    purpose: Mapped[str] = mapped_column(String(64), nullable=False)  # assistants|batch|fine-tune|vision
+    bytes_: Mapped[int] = mapped_column("bytes", Integer, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)  # absolute path on disk
+    workspace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+
+
+Index("ix_uploaded_files_purpose", UploadedFile.purpose)
+Index("ix_uploaded_files_workspace", UploadedFile.workspace_id)
+Index("ix_uploaded_files_created", UploadedFile.created_at)
+
+
+# Vector store (pgvector-backed semantic search)
+class VectorStore(Base):
+    """A named collection of embedded document chunks."""
+
+    __tablename__ = "vector_stores"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # "vs-<hex>"
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    workspace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist, onupdate=_now_ist)
+
+    chunks: Mapped[list["VectorChunk"]] = relationship(back_populates="store", cascade="all, delete-orphan")
+
+
+class VectorChunk(Base):
+    """A single embedded chunk stored in a vector store."""
+
+    __tablename__ = "vector_chunks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    store_id: Mapped[str] = mapped_column(String(64), ForeignKey("vector_stores.id", ondelete="CASCADE"), nullable=False)
+    file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)   # links to uploaded_files
+    filename: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list] = mapped_column(Vector(None), nullable=False)  # dim varies: 768=nomic, 3072=gemini
+    model: Mapped[str] = mapped_column(String(128), nullable=False)  # embedding model used
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+
+    store: Mapped[VectorStore] = relationship(back_populates="chunks")
+
+
+Index("ix_vector_chunks_store", VectorChunk.store_id)
+Index("ix_vector_chunks_file", VectorChunk.file_id)
+Index("ix_vector_stores_workspace", VectorStore.workspace_id)
+
+
+class Batch(Base):
+    """Async batch processing job — OpenAI Batch API compatible."""
+
+    __tablename__ = "batches"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)       # "batch-<hex>"
+    input_file_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    endpoint: Mapped[str] = mapped_column(String(128), nullable=False, default="/v1/chat/completions")
+    completion_window: Mapped[str] = mapped_column(String(16), nullable=False, default="24h")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="validating")
+    # validating | in_progress | finalizing | completed | failed | cancelled | expired
+    total_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+    in_progress_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finalizing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+Index("ix_batches_status", Batch.status)
+Index("ix_batches_created", Batch.created_at)
+Index("ix_batches_workspace", Batch.workspace_id)

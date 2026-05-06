@@ -491,6 +491,10 @@ async def messages_api(
         stream=stream,
         tools=tools,
         tool_choice=tool_choice,
+        # The /v1/messages caller (Claude Code, Hermes, Cursor …) runs its own
+        # tool-execution loop on the client side.  Atlas must return tool_use
+        # blocks directly without executing them server-side.
+        tool_passthrough=True,
     )
 
     # --- Execute ---

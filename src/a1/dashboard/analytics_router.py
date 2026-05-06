@@ -366,3 +366,115 @@ async def compare_models(
             results.append({"model": model_name, "error": str(e)})
 
     return {"results": results}
+
+
+# ---------------------------------------------------------------------------
+# Web Search Analytics
+# ---------------------------------------------------------------------------
+
+
+@router.get("/analytics/search/overview")
+async def search_overview():
+    """In-memory web search statistics: counts, latency, provider breakdown."""
+    return metrics.web_search_snapshot()
+
+
+@router.get("/analytics/search/recent")
+async def search_recent(limit: int = Query(50, ge=1, le=200)):
+    """Live feed of recent web searches (in-memory, resets on restart)."""
+    return {"searches": metrics.recent_searches(limit=limit)}
+
+
+@router.get("/analytics/search/history")
+async def search_history(
+    days: int = Query(7, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+):
+    """DB-backed search history with per-day rollup.
+
+    Returns daily counts, average latency, provider usage, and block rate.
+    """
+    from datetime import timezone as _tz
+
+    from sqlalchemy import func, select
+
+    from a1.common.tz import now_ist
+    from a1.db.models import WebSearchRun
+
+    since = now_ist() - timedelta(days=days)
+    result = await db.execute(
+        select(
+            func.date(WebSearchRun.created_at).label("day"),
+            func.count(WebSearchRun.id).label("total"),
+            func.sum(case((WebSearchRun.blocked == False, 1), else_=0)).label("succeeded"),  # noqa: E712
+            func.sum(case((WebSearchRun.blocked == True, 1), else_=0)).label("blocked"),  # noqa: E712
+            func.avg(WebSearchRun.latency_ms).label("avg_latency_ms"),
+            WebSearchRun.provider,
+        )
+        .where(WebSearchRun.created_at >= since)
+        .group_by(func.date(WebSearchRun.created_at), WebSearchRun.provider)
+        .order_by(func.date(WebSearchRun.created_at).desc())
+    )
+    rows = result.all()
+    return {
+        "days": days,
+        "data": [
+            {
+                "day": str(r.day),
+                "total": r.total,
+                "succeeded": r.succeeded or 0,
+                "blocked": r.blocked or 0,
+                "avg_latency_ms": round(float(r.avg_latency_ms or 0), 1),
+                "provider": r.provider,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/analytics/search/providers")
+async def search_providers():
+    """Current status of all registered search providers."""
+    from a1.search.providers.registry import search_registry
+
+    return {
+        "available": search_registry.is_available(),
+        "active": (
+            search_registry.active_provider.name
+            if search_registry.active_provider
+            else None
+        ),
+        "providers": search_registry.status(),
+    }
+
+
+@router.get("/analytics/search/citations")
+async def search_citations(
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recent citation records from web-grounded answers."""
+    from a1.db.models import WebCitation
+
+    result = await db.execute(
+        select(WebCitation)
+        .order_by(WebCitation.accessed_at.desc())
+        .limit(limit)
+    )
+    citations = result.scalars().all()
+    return {
+        "data": [
+            {
+                "id": str(c.id),
+                "run_id": str(c.run_id),
+                "source_url": c.source_url,
+                "title": c.title,
+                "published_date": c.published_date,
+                "accessed_at": c.accessed_at.isoformat(),
+                "claim_supported": c.claim_supported,
+                "rank": c.rank,
+            }
+            for c in citations
+        ],
+        "total": len(citations),
+    }

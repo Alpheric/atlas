@@ -119,12 +119,12 @@ def _inject_atlas_identity(request, atlas_model: str) -> None:
 
 _DISTILL_TIMEOUT = 30  # seconds — skip if local model is too slow
 _DISTILL_MAX_INPUT = 2000  # chars — truncate long prompts for local
-# Prefer fastest local models for distillation comparison
+# Prefer fastest available local models for distillation comparison
+# (Reflects actually-available Ollama models; remove unavailable models)
 _DISTILL_MODEL_PREFERENCE = [
-    "gemma3:12b",  # best general quality, server 2 (10.0.0.10)
-    "llama3.2:latest",  # fastest, server 1 (10.0.0.9)
-    "mistral:7b",  # server 2
-    "deepseek-coder:6.7b",  # code tasks, server 1
+    "qwen2.5-coder:7b",    # best local code model (server 10.0.0.9)
+    "llama3.2:latest",     # fast general model (server 10.0.0.9)
+    "deepseek-coder:6.7b", # code fallback (server 10.0.0.9)
 ]
 
 
@@ -443,6 +443,9 @@ async def handle_dual_execution(
                         await msg_repo.add(conv.id, m.role, (m.content or "")[:500], seq)
                         seq += 1
                 assistant_msg = await msg_repo.add(conv.id, "assistant", external_text[:2000], seq)
+                # Capture Vertex AI grounding if present
+                _grounding_meta = getattr(result, "grounding_metadata", None)
+                import json as _json_mod
                 await routing_repo.record(
                     message_id=assistant_msg.id,
                     provider=provider_name,
@@ -455,6 +458,8 @@ async def handle_dual_execution(
                     completion_tokens=result.usage.completion_tokens,
                     cost_usd=cost,
                     is_local=False,
+                    web_search_grounded=bool(_grounding_meta),
+                    grounding_metadata=_json_mod.dumps(_grounding_meta) if _grounding_meta else None,
                 )
     except Exception as e:
         log.warning(f"Failed to persist distillation conversation: {e}")

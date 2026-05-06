@@ -29,6 +29,7 @@ router = APIRouter()
 @router.get("/providers")
 async def list_providers():
     providers = provider_registry.list_providers()
+
     # Enrich claude-cli entry with per-account pool status if applicable
     cli_provider = provider_registry.get_provider("claude-cli")
     if cli_provider is not None:
@@ -38,6 +39,32 @@ async def list_providers():
                 if p["name"] == "claude-cli":
                     p["pool"] = cli_provider.pool_status()
                     break
+
+    # Enrich vertex entry with config info
+    from config.settings import settings as _s
+    for p in providers:
+        if p["name"] == "vertex":
+            p["auth_type"] = _s.vertex_auth_type
+            p["project_id"] = _s.vertex_project_id or None
+            p["default_model"] = _s.vertex_default_model
+            p["web_search_enabled"] = _s.vertex_web_search_enabled
+            break
+
+    # Add Veo if configured (separate from vertex provider registry)
+    if _s.vertex_project_id:
+        from a1.providers.veo import veo_provider
+        providers.append({
+            "name": "veo",
+            "healthy": bool(_s.vertex_project_id),  # assume ok if project set; health checked separately
+            "models": [m["name"] for m in veo_provider.list_models()],
+            "model_count": len(veo_provider.list_models()),
+            "project_id": _s.vertex_project_id,
+            "supports_vision": True,
+            "supports_streaming": False,
+            "supports_tools": False,
+            "description": "Google Veo — text-to-video & image-to-video generation",
+        })
+
     return {"data": providers}
 
 
@@ -103,6 +130,35 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
                 "cli_path": s.get("cli_path"),
                 "active_sessions": s.get("sessions", 0),
             })
+
+    # Append Vertex account (runtime, configured via .env — not DB-persisted)
+    from config.settings import settings as _s
+    vertex = provider_registry.get_provider("vertex")
+    if vertex:
+        vertex_healthy = provider_registry.is_healthy("vertex")
+        auth_label = (
+            f"Project: {_s.vertex_project_id}" if _s.vertex_auth_type == "service_account"
+            else f"API Key: {'*' * 8 + _s.vertex_api_key[-4:] if _s.vertex_api_key else 'not set'}"
+        )
+        data.append({
+            "id": "vertex:env",
+            "provider": "vertex",
+            "name": f"Gemini ({_s.vertex_default_model or 'gemini-2.5-pro'})",
+            "is_active": vertex_healthy,
+            "priority": 20,
+            "rate_limit_rpm": None,
+            "monthly_budget_usd": None,
+            "current_month_cost_usd": 0.0,
+            "total_requests": 0,
+            "total_tokens": 0,
+            "last_used_at": None,
+            "last_error": None if vertex_healthy else "Vertex unhealthy — check API key / project",
+            "created_at": None,
+            "auth_type": _s.vertex_auth_type,
+            "auth_label": auth_label,
+            "project_id": _s.vertex_project_id,
+            "default_model": _s.vertex_default_model,
+        })
 
     return {"data": data}
 
@@ -284,11 +340,11 @@ async def playground(body: dict):
         messages.append(MessageInput(role="system", content=system_prompt))
     messages.append(MessageInput(role="user", content=prompt))
 
-    # Resolve Atlas model aliases (atlas-*, alpheric-1, auto, local) to actual provider model
-    _ATLAS_ALIASES = {"alpheric-1", "auto", "auto:fast", "auto:cheap", "local"}
+    # Resolve Atlas model aliases (Atlas, atlas-*, alpheric-1, auto, local) to actual provider model
+    _ATLAS_ALIASES = {"Atlas", "alpheric-1", "auto", "auto:fast", "auto:cheap", "local"}
     _ATLAS_DEFAULT_MODEL = "claude-sonnet-4-20250514"
     actual_model = model
-    if model.startswith("atlas-") or model in _ATLAS_ALIASES:
+    if model.startswith("atlas-") or model.lower().startswith("atlas") or model in _ATLAS_ALIASES:
         actual_model = _ATLAS_DEFAULT_MODEL
 
     provider = provider_registry.get_provider_for_model(actual_model)

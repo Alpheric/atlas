@@ -1,4 +1,6 @@
-from pydantic import BaseModel, field_validator
+import json as _json
+
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class FunctionDef(BaseModel):
@@ -9,20 +11,63 @@ class FunctionDef(BaseModel):
 
 class ToolDef(BaseModel):
     type: str = "function"
-    function: FunctionDef
+    function: FunctionDef | None = None  # None for special types like code_interpreter
 
 
 class MessageInput(BaseModel):
     role: str
     content: str | list | None = None  # str or multimodal array
+    content_parts: list | None = None  # raw parts preserved when message has image_url items
     name: str | None = None
     tool_calls: list[dict] | None = None
     tool_call_id: str | None = None
 
+    @property
+    def has_images(self) -> bool:
+        """True if this message contains image_url content parts."""
+        return bool(self.content_parts)
+
+    @model_validator(mode="before")
+    @classmethod
+    def fix_anthropic_tool_roles(cls, values: dict) -> dict:
+        """Normalise Anthropic tool roles and preserve image content before text flattening.
+
+        1. Anthropic tool results (role=user, content=[{type:tool_result}]) → role=tool
+        2. Messages with image_url parts have their raw parts saved in content_parts
+           so vision-capable providers (Vertex/Gemini) can use them directly.
+        """
+        if not isinstance(values, dict):
+            return values
+
+        role = values.get("role", "")
+        content = values.get("content")
+
+        if role == "user" and isinstance(content, list) and content:
+            # Anthropic tool_result promotion
+            if all(isinstance(i, dict) and i.get("type") == "tool_result" for i in content):
+                values = dict(values)
+                values["role"] = "tool"
+                if not values.get("tool_call_id"):
+                    values["tool_call_id"] = content[0].get("tool_use_id")
+
+        # Preserve raw parts when content list contains images
+        if isinstance(content, list) and "content_parts" not in values:
+            has_image = any(
+                isinstance(i, dict) and i.get("type") == "image_url"
+                for i in content
+            )
+            if has_image:
+                values = dict(values)
+                values["content_parts"] = content
+
+        return values
+
     @field_validator("content", mode="before")
     @classmethod
     def normalize_content(cls, v):
-        """Normalize OpenAI/Anthropic multimodal content arrays to plain strings.
+        """Flatten multimodal content arrays to plain strings for text-only providers.
+
+        Images are skipped here — vision-capable providers read content_parts instead.
 
         Handles:
           OpenAI:    [{"type": "text", "text": "hello"}, {"type": "image_url", ...}]
@@ -37,9 +82,8 @@ class MessageInput(BaseModel):
                     if t == "text":
                         parts.append(item.get("text", ""))
                     elif t == "image_url":
-                        pass  # Skip images — Atlas doesn't support vision yet
+                        parts.append("[image]")  # placeholder so text context isn't empty
                     elif t == "tool_result":
-                        # Anthropic tool_result: extract text from content field
                         inner = item.get("content", "")
                         if isinstance(inner, list):
                             inner_parts = [
@@ -51,7 +95,10 @@ class MessageInput(BaseModel):
                         elif isinstance(inner, str):
                             parts.append(inner)
                     elif t == "tool_use":
-                        pass  # Skip tool_use blocks (assistant turn artifacts)
+                        name = item.get("name", "unknown")
+                        input_data = item.get("input", {})
+                        tag_json = _json.dumps({"name": name, "input": input_data})
+                        parts.append(f"<tool_call>{tag_json}</tool_call>")
                     else:
                         text_val = item.get("text", item.get("content", ""))
                         if text_val:
@@ -82,3 +129,4 @@ class ChatCompletionRequest(BaseModel):
     conversation_id: str | None = None
     session_id: str | None = None
     previous_response_id: str | None = None
+    metadata: dict | None = None  # internal routing hints (e.g. {"web_search": True})

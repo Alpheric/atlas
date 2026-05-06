@@ -29,8 +29,9 @@ from a1.proxy.pipeline import (
     strip_think_tokens,
 )
 from a1.proxy.request_models import ChatCompletionRequest
-from a1.routing.atlas_models import ATLAS_TASK_MAP, resolve_atlas_model
+from a1.routing.atlas_models import ATLAS_TASK_MAP, get_shadow_model, resolve_atlas_model
 from a1.routing.classifier import classify_task, classify_task_with_fallback
+from a1.routing.smart_router import RoutingDecision, smart_router
 from a1.routing.strategy import select_model
 from config.settings import settings
 
@@ -74,6 +75,10 @@ class CorePipelineInput:
     stream: bool = False
     tools: list | None = None
     tool_choice: str | None = None
+    # When True the caller handles the tool-execution loop (e.g. Hermes runs tools
+    # locally).  Atlas makes ONE provider call, returns tool_use blocks directly to
+    # the client, and does NOT run execute_tool_loop server-side.
+    tool_passthrough: bool = False
 
     # Session
     session_id: str | None = None
@@ -84,6 +89,9 @@ class CorePipelineInput:
     skip_history_injection: bool = False  # OpenClaw sends full history
     use_llm_classifier: bool = False  # Atlas uses LLM fallback classifier
     atlas_model_override: str | None = None  # agent persona forced a model
+
+    # Routing mode (quality | balanced | low_cost | local_first)
+    routing_mode: str = "balanced"
 
     # DB context
     conversation_id: str | None = None
@@ -125,12 +133,223 @@ class CorePipelineResult:
     self_healed: bool = False
     original_response: str | None = None  # pre-critique text kept for audit
 
+    # Web search grounding
+    web_search_run_id: str | None = None
+    web_citations: list | None = None  # list[Citation] after response
+    grounding_metadata: str | None = None  # JSON-serialised GroundingMetadata from Vertex
+
+    # Smart routing observability
+    shadow_model: str | None = None       # atlas-* model running in background
+    routing_reason: str = ""              # why this model was selected
+    routing_mode: str = "balanced"
+    context_tokens: int = 0
+    is_sticky: bool = False               # re-used session's primary model
+
     # Error
     error: str | None = None
     error_type: str | None = None  # "provider_error", "internal_error", etc.
 
     # Raw provider response (for openai compat format)
     raw_response: object | None = None
+
+
+async def _tool_complete_and_stream(provider, req, timeout: float = 25.0, fallback=None):
+    """Run provider.complete() INSIDE the stream so SSE starts immediately.
+
+    Emits the role chunk right away to keep Ares/Hermes alive during inference.
+    If provider times out (default 25s) and a fallback provider is given, retries
+    once on the fallback before emitting an error chunk.
+    """
+    from a1.proxy.response_models import ChatCompletionChunk, DeltaMessage, StreamChoice
+
+    chunk_id = f"chatcmpl-cli-{uuid.uuid4().hex[:8]}"
+    model = req.model
+
+    # Emit role chunk immediately — keeps the SSE connection alive while model runs
+    yield ChatCompletionChunk(
+        id=chunk_id,
+        model=model,
+        choices=[StreamChoice(delta=DeltaMessage(role="assistant"))],
+    )
+
+    # Run the actual completion with a timeout; optionally retry on fallback
+    resp = None
+    for attempt, prov in enumerate([provider] + ([fallback] if fallback else [])):
+        try:
+            resp = await asyncio.wait_for(prov.complete(req), timeout=timeout)
+            break
+        except asyncio.TimeoutError:
+            label = getattr(prov, "name", str(prov))
+            log.warning(f"[tool_stream] {label} timed out after {timeout}s"
+                        + (" — retrying on fallback" if fallback and attempt == 0 else ""))
+        except Exception as e:
+            label = getattr(prov, "name", str(prov))
+            log.error(f"[tool_stream] {label} error: {e}"
+                      + (" — retrying on fallback" if fallback and attempt == 0 else ""))
+
+    if resp is None:
+        yield ChatCompletionChunk(
+            id=chunk_id, model=model,
+            choices=[StreamChoice(
+                delta=DeltaMessage(content="Tool execution timed out. Please try again."),
+                finish_reason="stop",
+            )],
+        )
+        return
+
+    msg = resp.choices[0].message if resp.choices else None
+
+    if msg and msg.tool_calls:
+        for i, tc in enumerate(msg.tool_calls):
+            yield ChatCompletionChunk(
+                id=chunk_id, model=model,
+                choices=[StreamChoice(delta=DeltaMessage(tool_calls=[{
+                    "index": i,
+                    "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:8]}"),
+                    "type": "function",
+                    "function": {"name": tc["function"]["name"], "arguments": ""},
+                }]))],
+            )
+            yield ChatCompletionChunk(
+                id=chunk_id, model=model,
+                choices=[StreamChoice(delta=DeltaMessage(tool_calls=[{
+                    "index": i,
+                    "function": {"arguments": tc["function"]["arguments"]},
+                }]))],
+            )
+        yield ChatCompletionChunk(
+            id=chunk_id, model=model,
+            choices=[StreamChoice(delta=DeltaMessage(), finish_reason="tool_calls")],
+        )
+    else:
+        content = (msg.content or "") if msg else ""
+        if content:
+            yield ChatCompletionChunk(
+                id=chunk_id, model=model,
+                choices=[StreamChoice(delta=DeltaMessage(content=content))],
+            )
+        yield ChatCompletionChunk(
+            id=chunk_id, model=model,
+            choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
+        )
+
+    if resp.usage:
+        from a1.proxy.response_models import Usage
+        yield ChatCompletionChunk(
+            id=chunk_id, model=model, choices=[],
+            usage=Usage(
+                prompt_tokens=resp.usage.prompt_tokens,
+                completion_tokens=resp.usage.completion_tokens,
+                total_tokens=resp.usage.total_tokens,
+            ),
+        )
+
+
+async def _tool_response_as_stream(resp):
+    """Convert a ChatCompletionResponse with tool_calls into an OpenAI streaming iterator.
+
+    Emits proper tool_calls delta chunks so that clients expecting streaming
+    (e.g. Hermes/Ares) receive structured tool_calls instead of raw <tool_call> XML.
+    """
+    from a1.proxy.response_models import ChatCompletionChunk, DeltaMessage, StreamChoice
+
+    chunk_id = f"chatcmpl-cli-{uuid.uuid4().hex[:8]}"
+    model = resp.model
+    msg = resp.choices[0].message if resp.choices else None
+
+    # Role announcement
+    yield ChatCompletionChunk(
+        id=chunk_id,
+        model=model,
+        choices=[StreamChoice(delta=DeltaMessage(role="assistant"))],
+    )
+
+    if msg and msg.tool_calls:
+        for i, tc in enumerate(msg.tool_calls):
+            # Header chunk: id + name
+            yield ChatCompletionChunk(
+                id=chunk_id,
+                model=model,
+                choices=[StreamChoice(delta=DeltaMessage(tool_calls=[{
+                    "index": i,
+                    "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:8]}"),
+                    "type": "function",
+                    "function": {"name": tc["function"]["name"], "arguments": ""},
+                }]))],
+            )
+            # Arguments chunk
+            yield ChatCompletionChunk(
+                id=chunk_id,
+                model=model,
+                choices=[StreamChoice(delta=DeltaMessage(tool_calls=[{
+                    "index": i,
+                    "function": {"arguments": tc["function"]["arguments"]},
+                }]))],
+            )
+        # Finish with tool_calls reason
+        yield ChatCompletionChunk(
+            id=chunk_id,
+            model=model,
+            choices=[StreamChoice(delta=DeltaMessage(), finish_reason="tool_calls")],
+        )
+    elif msg and msg.content:
+        yield ChatCompletionChunk(
+            id=chunk_id,
+            model=model,
+            choices=[StreamChoice(delta=DeltaMessage(content=msg.content))],
+        )
+        yield ChatCompletionChunk(
+            id=chunk_id,
+            model=model,
+            choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
+        )
+
+    if resp.usage:
+        from a1.proxy.response_models import Usage
+        yield ChatCompletionChunk(
+            id=chunk_id,
+            model=model,
+            choices=[],
+            usage=Usage(
+                prompt_tokens=resp.usage.prompt_tokens,
+                completion_tokens=resp.usage.completion_tokens,
+                total_tokens=resp.usage.total_tokens,
+            ),
+        )
+
+
+async def _text_response_as_stream(resp):
+    """Simulate streaming for a buffered text response."""
+    from a1.proxy.response_models import ChatCompletionChunk, DeltaMessage, StreamChoice
+
+    chunk_id = f"chatcmpl-cli-{uuid.uuid4().hex[:8]}"
+    model = resp.model
+    msg = resp.choices[0].message if resp.choices else None
+    text = (msg.content or "") if msg else ""
+
+    yield ChatCompletionChunk(
+        id=chunk_id, model=model,
+        choices=[StreamChoice(delta=DeltaMessage(role="assistant"))],
+    )
+    if text:
+        yield ChatCompletionChunk(
+            id=chunk_id, model=model,
+            choices=[StreamChoice(delta=DeltaMessage(content=text))],
+        )
+    yield ChatCompletionChunk(
+        id=chunk_id, model=model,
+        choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
+    )
+    if resp.usage:
+        from a1.proxy.response_models import Usage
+        yield ChatCompletionChunk(
+            id=chunk_id, model=model, choices=[],
+            usage=Usage(
+                prompt_tokens=resp.usage.prompt_tokens,
+                completion_tokens=resp.usage.completion_tokens,
+                total_tokens=resp.usage.total_tokens,
+            ),
+        )
 
 
 class CorePipeline:
@@ -156,6 +375,8 @@ class CorePipeline:
             session = None
             if not inp.skip_history_injection:
                 session, inp.messages = await self._load_session_safe(inp)
+            # Stash session on inp so _classify_and_resolve can read sticky routing
+            inp._session = session  # type: ignore[attr-defined]
 
             # Step 3: PII mask
             mask_map = {}
@@ -166,11 +387,51 @@ class CorePipeline:
                     inp.messages, mask_map = inp.messages, mask_map
                 result.pii_masked = bool(mask_map)
 
-            # Step 4: Classify task + resolve Atlas model
+            # Step 4: Classify task + resolve Atlas model (smart_router)
             task_type, confidence, atlas_model = await self._classify_and_resolve(inp)
             result.task_type = task_type
             result.confidence = confidence
             result.atlas_model = atlas_model
+
+            # Propagate routing decision observability fields
+            rd: RoutingDecision | None = getattr(inp, "routing_decision", None)
+            if rd:
+                result.routing_reason = rd.selection_reason
+                result.routing_mode = rd.routing_mode
+                result.context_tokens = rd.context_tokens
+                result.is_sticky = rd.is_sticky
+                result.shadow_model = rd.shadow_model
+                log.info(
+                    f"[route] task={task_type} model={rd.primary_model} "
+                    f"provider={rd.primary_provider} mode={rd.routing_mode} "
+                    f"reason={rd.selection_reason} sticky={rd.is_sticky} "
+                    f"shadow={rd.shadow_model} ctx_tokens={rd.context_tokens}"
+                )
+
+            # Step 4b: Web search grounding — detect intent, search, inject context.
+            # Runs before cache (search results must be part of the cached response)
+            # and before budget (search adds a small cost tracked separately).
+            # Safe for both streaming and non-streaming requests.
+            search_ctx = None
+            if settings.web_search_enabled:
+                search_ctx = await self._maybe_search(inp, task_type, result)
+                if search_ctx and not search_ctx.blocked:
+                    if search_ctx.provider == "vertex_grounding":
+                        # Vertex path: force routing to Vertex and enable googleSearch tool.
+                        # The grounding happens inside the LLM call — no context block needed.
+                        inp.force_provider = "vertex"  # type: ignore[attr-defined]
+                        inp.metadata = getattr(inp, "metadata", {}) or {}
+                        inp.metadata["web_search"] = True  # type: ignore[attr-defined]
+                        result.web_search_run_id = search_ctx.run_id
+                        log.info(
+                            f"[search] Vertex grounding active — forcing provider=vertex "
+                            f"intent={search_ctx.intent_score}"
+                        )
+                    else:
+                        # External provider path: inject results as system message
+                        from a1.search.pipeline import inject_search_context
+                        inp.messages = inject_search_context(inp.messages, search_ctx)
+                        result.web_search_run_id = search_ctx.run_id
 
             # Step 5: Cache check (non-streaming only)
             if not inp.stream and settings.task_cache_enabled and atlas_model:
@@ -201,7 +462,9 @@ class CorePipeline:
             # waiting for the full training pipeline to graduate it.
             # This "warms up" local routing quickly for repetitive agent tasks.
             threshold = settings.distillation_task_repeat_threshold
-            if threshold > 0 and task_type and not inp.stream:
+            # Skip fast-routing for tool requests — Ollama doesn't support our
+            # <tool_call> prompt engineering format; Claude CLI must handle them.
+            if threshold > 0 and task_type and not inp.stream and not inp.tools:
                 _task_repeat_counts[task_type] = _task_repeat_counts.get(task_type, 0) + 1
                 count = _task_repeat_counts[task_type]
                 if count >= threshold:
@@ -218,7 +481,7 @@ class CorePipeline:
                             self._post_process(result, session, inp, mask_map, start_time)
                             return result
                         # If local failed, fall through to standard routing
-            elif threshold > 0 and task_type:
+            elif threshold > 0 and task_type and not inp.tools:
                 _task_repeat_counts[task_type] = _task_repeat_counts.get(task_type, 0) + 1
 
             # Step 6: Route and execute
@@ -230,7 +493,27 @@ class CorePipeline:
 
                 result.assistant_text = pii_masker.unmask(result.assistant_text, mask_map)
 
-            # Step 7b: Quality score + self-critique gate (non-streaming, external provider only)
+            # Step 7b: Finalise citations from web search (non-streaming only).
+            # Re-scores which [N] markers appear in the response and persists
+            # citation records to the DB.
+            if search_ctx and result.assistant_text and not inp.stream:
+                from a1.search.citation import build_citations, inject_citations_if_missing
+                from a1.search.pipeline import persist_citations
+                updated_citations = build_citations(
+                    search_ctx.results,
+                    result.assistant_text,
+                    accessed_at=None,
+                )
+                # Append citation footer if the LLM didn't already include one
+                result.assistant_text = inject_citations_if_missing(
+                    result.assistant_text, updated_citations
+                )
+                result.web_citations = updated_citations
+                asyncio.create_task(
+                    persist_citations(search_ctx.run_id, None, updated_citations)
+                )
+
+            # Step 7c: Quality score + self-critique gate (non-streaming, external provider only)
             if result.assistant_text and not inp.stream and not result.cache_hit:
                 from a1.healing.quality_scorer import score_response
 
@@ -279,6 +562,27 @@ class CorePipeline:
             log.error(f"[pipeline] Execution error: {e}", exc_info=True)
 
         return result
+
+    async def _maybe_search(
+        self,
+        inp: "CorePipelineInput",
+        task_type: str | None,
+        result: "CorePipelineResult",
+    ):
+        """Run web search pipeline if intent detected. Returns SearchContext or None."""
+        try:
+            from a1.search.pipeline import maybe_search
+            ctx = await maybe_search(
+                messages=inp.messages,
+                task_type=task_type,
+                workspace_id=inp.workspace_id,
+                session_id=inp.session_id,
+                atlas_model=result.atlas_model,
+            )
+            return ctx
+        except Exception as e:
+            log.warning(f"[pipeline] Web search failed (non-fatal): {e}")
+            return None
 
     async def _check_budget(self, workspace_id: str) -> bool:
         """Check if workspace is within its monthly budget. Returns True if OK."""
@@ -364,21 +668,33 @@ class CorePipeline:
             log.warning(f"[pipeline] local-only execution failed: {e}")
 
     async def _classify_and_resolve(self, inp: CorePipelineInput):
-        """Classify task type and resolve Atlas model."""
-        model = inp.model
-        task_type = None
-        confidence = 0.0
-        atlas_model = None
+        """Classify task type and resolve Atlas model.
 
-        # Direct Atlas model specified
+        Returns (task_type, confidence, atlas_model).
+        Also populates inp.routing_decision (RoutingDecision) for the executor.
+        """
+        model = inp.model
+
+        # ── Direct Atlas model specified (atlas-plan, atlas-code, etc.) ──
         if model in ATLAS_TASK_MAP:
             task_type = ATLAS_TASK_MAP[model]
-            confidence = 1.0
-            atlas_model = model
-            return task_type, confidence, atlas_model
+            inp.routing_decision = smart_router.select(  # type: ignore[attr-defined]
+                task_type=task_type,
+                routing_mode=inp.routing_mode,
+                context_tokens=self._estimate_context_tokens(inp),
+                force_model=model,
+            )
+            inp.routing_decision.confidence = 1.0
+            return task_type, 1.0, model
 
-        # Auto-select: classify and resolve
-        if model == "atlas" or model.startswith("auto") or model == "local":
+        # ── Public "Atlas" or auto/* aliases → classify and route ─────────
+        is_atlas_public = (
+            model in ("Atlas", "atlas", "alpheric-1", "local")
+            or model.startswith("auto")
+            or model.lower() == "atlas"
+        )
+
+        if is_atlas_public:
             temp_req = ChatCompletionRequest(
                 model="auto",
                 messages=inp.messages,
@@ -389,18 +705,59 @@ class CorePipeline:
             else:
                 task_type, confidence = classify_task(temp_req)
 
-            if model == "atlas" or model in ATLAS_TASK_MAP:
-                atlas_model = resolve_atlas_model(task_type)
+            # Adjust strategy → routing_mode mapping
+            mode = inp.routing_mode
+            if model == "auto:fast":
+                mode = "low_cost"
+            elif model == "auto:cheap":
+                mode = "low_cost"
+
+            # Get session sticky state
+            session = getattr(inp, "_session", None)
+            session_primary = getattr(session, "primary_model", None) if session else None
+            session_task = getattr(session, "primary_task_type", None) if session else None
+
+            ctx_tokens = self._estimate_context_tokens(inp)
+            decision = smart_router.select(
+                task_type=task_type,
+                routing_mode=mode,
+                context_tokens=ctx_tokens,
+                session_primary_model=session_primary,
+                session_primary_task=session_task,
+            )
+            decision.confidence = confidence
+            inp.routing_decision = decision  # type: ignore[attr-defined]
+
+            atlas_model = decision.atlas_model or resolve_atlas_model(task_type)
             return task_type, confidence, atlas_model
 
-        # Explicit non-Atlas model
+        # ── Explicit non-Atlas model (e.g. gemini-2.5-pro, qwen2.5-coder:7b) ──
         temp_req = ChatCompletionRequest(
             model=model,
             messages=inp.messages,
             max_tokens=inp.max_tokens,
         )
         task_type, confidence = classify_task(temp_req)
+        # No atlas_model — direct provider routing
+        decision = RoutingDecision(
+            primary_model=model,
+            task_type=task_type,
+            routing_mode=inp.routing_mode,
+            confidence=confidence,
+            selection_reason="explicit_model",
+        )
+        smart_router._resolve_provider(decision)
+        inp.routing_decision = decision  # type: ignore[attr-defined]
         return task_type, confidence, None
+
+    def _estimate_context_tokens(self, inp: CorePipelineInput) -> int:
+        """Estimate total token count for context-length routing decisions."""
+        try:
+            from a1.common.tokens import count_tokens
+            full_text = " ".join(m.content or "" for m in inp.messages if hasattr(m, "content"))
+            return count_tokens(full_text)
+        except Exception:
+            return 0
 
     async def _route_and_execute(
         self,
@@ -412,8 +769,154 @@ class CorePipeline:
         atlas_model: str | None,
     ):
         """Route request to provider and execute."""
-        # Atlas distillation path
-        if settings.distillation_enabled and atlas_model:
+        # Vision detection: if any message has image content, force Vertex (only vision provider).
+        has_vision = any(
+            getattr(m, "has_images", False)
+            for m in inp.messages
+            if not isinstance(m, dict)
+        )
+        if has_vision and not getattr(inp, "force_provider", None):
+            inp.force_provider = "vertex"  # type: ignore[attr-defined]
+            log.info("[pipeline] vision content detected → forcing provider=vertex")
+
+        # Vertex grounding path: force straight to Vertex with web_search metadata.
+        force_provider = getattr(inp, "force_provider", None)
+        if force_provider == "vertex":
+            vertex = provider_registry.get_provider("vertex")
+            if vertex and provider_registry.is_healthy("vertex"):
+                model = settings.vertex_default_model or "gemini-2.5-pro"
+                from a1.proxy.request_models import ChatCompletionRequest
+                req = ChatCompletionRequest(
+                    model=model,
+                    messages=inp.messages,
+                    max_tokens=inp.max_tokens,
+                    temperature=inp.temperature,
+                    stream=inp.stream,
+                )
+                # Signal VertexProvider to enable googleSearch grounding
+                req.metadata = {"web_search": True}  # type: ignore[attr-defined]
+                result.provider_name = "vertex"
+                result.model_name = model
+                result.is_local = False
+                if inp.stream:
+                    result.chunk_iterator = vertex.stream(req)
+                    return
+                resp = await vertex.complete(req)
+                result.assistant_text = resp.choices[0].message.content if resp.choices else ""
+                result.prompt_tokens = resp.usage.prompt_tokens
+                result.completion_tokens = resp.usage.completion_tokens
+                result.cost_usd = vertex.estimate_cost(
+                    resp.usage.prompt_tokens, resp.usage.completion_tokens, model
+                )
+                # Capture grounding metadata for citation storage
+                gm = getattr(resp, "grounding_metadata", None)
+                if gm:
+                    import json as _json
+                    result.grounding_metadata = _json.dumps(gm)  # type: ignore[attr-defined]
+                return
+            # Vertex unavailable — fall through to normal routing
+            log.warning("[pipeline] Vertex grounding requested but vertex unhealthy — falling through")
+
+        # Tool requests: bypass distillation & fast-path.
+        # Priority: Vertex (Gemini native function calling) → claude-cli fallback.
+        # Vertex has its own quota independent of Claude CLI accounts.
+        if inp.tools and atlas_model:
+            from a1.proxy.request_models import ChatCompletionRequest
+
+            vertex = provider_registry.get_provider("vertex")
+            cli = provider_registry.get_provider("claude-cli")
+            vertex_ok = bool(vertex and provider_registry.is_healthy("vertex"))
+            cli_ok = bool(cli and provider_registry.is_healthy("claude-cli"))
+
+            if vertex_ok:
+                vertex_model = settings.vertex_default_model or "gemini-2.5-flash"
+                req = ChatCompletionRequest(
+                    model=vertex_model,
+                    messages=inp.messages,
+                    max_tokens=inp.max_tokens,
+                    temperature=inp.temperature,
+                    stream=False,
+                    tools=inp.tools,
+                    tool_choice=inp.tool_choice,
+                )
+                log.info(f"[pipeline] tool request → vertex/{vertex_model}")
+
+                if inp.stream:
+                    result.chunk_iterator = _tool_complete_and_stream(
+                        vertex, req,
+                        timeout=30.0,
+                        fallback=cli if cli_ok else None,
+                    )
+                    result.provider_name = "vertex"
+                    result.model_name = vertex_model
+                    return
+
+                resp = None
+                used_provider = "vertex"
+                try:
+                    resp = await asyncio.wait_for(vertex.complete(req), timeout=30.0)
+                except (asyncio.TimeoutError, Exception) as e:
+                    log.warning(f"[pipeline] vertex tool call failed ({e}) — falling back to claude-cli")
+                    if cli_ok:
+                        from a1.training.auto_trainer import _get_external_provider
+                        _, _, ext_model = _get_external_provider(atlas_model)
+                        cli_req = ChatCompletionRequest(
+                            model=ext_model or atlas_model,
+                            messages=inp.messages,
+                            max_tokens=inp.max_tokens,
+                            temperature=inp.temperature,
+                            stream=False,
+                            tools=inp.tools,
+                            tool_choice=inp.tool_choice,
+                        )
+                        resp = await cli.complete(cli_req)
+                        used_provider = "claude-cli"
+
+                if resp:
+                    result.raw_response = resp
+                    result.provider_name = used_provider
+                    result.model_name = vertex_model if used_provider == "vertex" else atlas_model
+                    result.prompt_tokens = resp.usage.prompt_tokens if resp.usage else 0
+                    result.completion_tokens = resp.usage.completion_tokens if resp.usage else 0
+                    result.total_tokens = resp.usage.total_tokens if resp.usage else 0
+                    msg = resp.choices[0].message if resp.choices else None
+                    result.assistant_text = (msg.content or "") if msg else ""
+                    return
+
+            # ── Vertex unavailable — go directly to claude-cli ───────────────────
+            if cli_ok:
+                from a1.training.auto_trainer import _get_external_provider
+                _, _, ext_model = _get_external_provider(atlas_model)
+                req = ChatCompletionRequest(
+                    model=ext_model or atlas_model,
+                    messages=inp.messages,
+                    max_tokens=inp.max_tokens,
+                    temperature=inp.temperature,
+                    stream=False,
+                    tools=inp.tools,
+                    tool_choice=inp.tool_choice,
+                )
+                log.info(f"[pipeline] tool request → claude-cli/{ext_model or atlas_model} (vertex unavailable)")
+
+                if inp.stream:
+                    result.chunk_iterator = _tool_complete_and_stream(cli, req)
+                    result.provider_name = "claude-cli"
+                    result.model_name = atlas_model
+                    return
+
+                resp = await cli.complete(req)
+                result.raw_response = resp
+                result.provider_name = "claude-cli"
+                result.model_name = atlas_model
+                result.prompt_tokens = resp.usage.prompt_tokens if resp.usage else 0
+                result.completion_tokens = resp.usage.completion_tokens if resp.usage else 0
+                result.total_tokens = resp.usage.total_tokens if resp.usage else 0
+                msg = resp.choices[0].message if resp.choices else None
+                result.assistant_text = (msg.content or "") if msg else ""
+                return
+
+        # Atlas distillation path — skip when tools are present (handled above).
+        if settings.distillation_enabled and atlas_model and not inp.tools:
             await self._distillation_path(inp, result, response, task_type, confidence, atlas_model)
             if result.assistant_text or result.chunk_iterator:
                 return
@@ -512,11 +1015,30 @@ class CorePipeline:
                 )
 
     async def _direct_provider_path(self, inp, result, task_type):
-        """Route to a specific provider directly (local or external)."""
-        model = inp.model
-        strategy = inp.strategy
+        """Route to a specific provider directly (local or external).
 
-        if model.startswith("auto") or model == "local":
+        Uses RoutingDecision from smart_router when available, falls back to
+        legacy select_model() for backward compatibility.
+        """
+        model = inp.model
+        rd: RoutingDecision | None = getattr(inp, "routing_decision", None)
+
+        # Smart router provided a decision — use its non-atlas model directly
+        if rd and rd.provider_model and not (rd.atlas_model and rd.primary_provider == "claude-cli"):
+            model_name = rd.provider_model
+            provider_name = rd.primary_provider
+            # Try fallback chain if primary provider unhealthy
+            if not provider_registry.is_healthy(provider_name):
+                for fb_model in rd.fallback_models:
+                    p = provider_registry.get_provider_for_model(fb_model)
+                    if p and provider_registry.is_healthy(p.name):
+                        model_name = fb_model
+                        provider_name = p.name
+                        log.info(f"[route] Fallback: {rd.primary_model} → {fb_model} ({p.name})")
+                        result.routing_reason = f"fallback:{rd.primary_model}->{fb_model}"
+                        break
+        elif model.startswith("auto") or model == "local" or model in ("Atlas", "atlas", "alpheric-1"):
+            strategy = inp.strategy
             if model == "auto:fast":
                 strategy = "lowest_latency"
             elif model == "auto:cheap":
@@ -563,9 +1085,41 @@ class CorePipeline:
                 result.chunk_iterator = provider.stream(req)
                 return
 
-            if req.tools:
+            # Long-context chunking — MapReduce when content exceeds provider window.
+            # Only for non-streaming, non-tool-use text requests.
+            if not req.tools and not inp.tool_passthrough:
+                from a1.chunking.chunker import chunk_and_reduce, needs_chunking
+                from a1.common.tokens import count_tokens
+
+                ctx_tokens = sum(count_tokens(m.content or "") for m in inp.messages if hasattr(m, "content"))
+                provider_models = provider.list_models() if hasattr(provider, "list_models") else []
+                ctx_window = next(
+                    (m.context_window for m in provider_models if m.name == model_name),
+                    128_000,
+                )
+                if needs_chunking(ctx_tokens, ctx_window):
+                    log.info(
+                        f"[pipeline] Long-context chunking: {ctx_tokens}tok > "
+                        f"{int(ctx_window * 0.85)}tok threshold (window={ctx_window})"
+                    )
+                    text = await chunk_and_reduce(provider, req, ctx_window)
+                    result.assistant_text = text
+                    result.prompt_tokens = ctx_tokens
+                    result.completion_tokens = count_tokens(text)
+                    result.total_tokens = result.prompt_tokens + result.completion_tokens
+                    result.routing_reason = (result.routing_reason or "") + "+chunked"
+                    if not is_local:
+                        result.cost_usd = provider.estimate_cost(
+                            result.prompt_tokens, result.completion_tokens, model_name
+                        )
+                    return
+
+            if req.tools and not inp.tool_passthrough:
+                # Atlas executes its own server-side tools (agent / planning mode)
                 resp = await execute_tool_loop(provider, req)
             else:
+                # tool_passthrough=True → client runs the tool loop (e.g. Hermes);
+                # or no tools at all → single completion call.
                 resp = await provider.complete(req)
 
             text = resp.choices[0].message.content if resp.choices else ""
@@ -612,10 +1166,20 @@ class CorePipeline:
             cache_msgs = [{"role": m.role, "content": m.content or ""} for m in inp.messages]
             task_cache.put(result.atlas_model, cache_msgs, result.assistant_text, result.task_type)
 
-        # Step 9: Session save
+        # Step 9: Session save + routing stickiness update
         if session and result.assistant_text:
             session.add_message("user", inp.raw_user_input or "")
             session.add_message("assistant", result.assistant_text or "")
+            # Update session's sticky routing model (first successful response wins)
+            if result.provider_name and result.model_name and not result.cache_hit:
+                sticky_model = result.atlas_model or result.model_name
+                session.set_routing(
+                    model=sticky_model,
+                    provider=result.provider_name,
+                    task_type=result.task_type,
+                )
+                # Propagate routing_mode from inp so it sticks
+                session.routing_mode = inp.routing_mode
             from a1.session.manager import session_manager
 
             asyncio.create_task(session_manager.link_response(result.response_id, session.id))

@@ -93,6 +93,12 @@ async def lifespan(app: FastAPI):
 
     register_computer_tools()
 
+    # Register code interpreter into the proxy tool_registry
+    from a1.proxy.pipeline import tool_registry as _proxy_tool_registry
+    from a1.tools.code_interpreter import register as _register_ci
+
+    _register_ci(_proxy_tool_registry)
+
     # Periodic health refresh every 5 minutes (background)
     async def _health_refresh_loop():
         while True:
@@ -156,6 +162,10 @@ async def lifespan(app: FastAPI):
 
         asyncio.create_task(_warm_up())
 
+    # Initialize web search providers (no-op if no API keys configured)
+    from a1.search.providers.registry import init_search_providers
+    init_search_providers()
+
     # Start conversation health monitor (background task, fire-and-forget)
     from a1.healing.conversation_monitor import run_health_monitor
 
@@ -215,10 +225,25 @@ def create_app() -> FastAPI:
 
     app.include_router(notebook_router)
 
+    # Veo video generation endpoints
+    from a1.proxy.veo_router import router as veo_router
+
+    app.include_router(veo_router)
+
     # Prometheus /metrics endpoint
     from a1.common.prometheus import router as prometheus_router
 
     app.include_router(prometheus_router)
+
+    # Provisioning API (OneDesk / platform-to-platform)
+    from a1.provisioning.router import router as provisioning_router
+
+    app.include_router(provisioning_router)
+
+    # MCP server — mount SSE transport at /mcp
+    from a1.mcp.server import mcp as _mcp
+
+    app.mount("/mcp", _mcp.sse_app())
 
     # Request ID + logging middleware
     import uuid as _uuid

@@ -1,3 +1,5 @@
+from pydantic import Field
+from pydantic.aliases import AliasChoices
 from pydantic_settings import BaseSettings
 
 
@@ -21,6 +23,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     vertex_project_id: str = ""
     vertex_location: str = "us-central1"
+    # Vertex AI / Gemini extended config
+    vertex_api_key: str = ""                           # A1_VERTEX_API_KEY (Google AI Studio key)
+    vertex_auth_type: str = "api_key"                  # "api_key" | "service_account"
+    vertex_default_model: str = "gemini-2.0-flash"     # A1_VERTEX_DEFAULT_MODEL
+    vertex_web_search_enabled: bool = False            # A1_VERTEX_WEB_SEARCH_ENABLED
+    vertex_timeout: float = 60.0                       # A1_VERTEX_TIMEOUT
 
     # Ollama (supports multiple servers)
     ollama_base_url: str = "http://localhost:11434"
@@ -146,6 +154,51 @@ class Settings(BaseSettings):
     quality_critique_model: str = "claude-haiku-4-5"  # fast, cheap critique model
     feedback_regen_enabled: bool = True       # thumbs-down triggers regeneration
     health_monitor_interval_seconds: int = 300  # how often to scan conversations (seconds)
+
+    # Web Search
+    web_search_enabled: bool = False          # master switch; opt-in
+    web_search_intent_threshold: int = 50     # intent score 0-100 required to trigger search
+    web_search_max_results: int = 5           # max results to fetch per query
+    web_search_timeout_s: float = 10.0        # wall-clock timeout for the search API call
+    web_search_depth: str = "basic"           # "basic" | "advanced" (Tavily)
+    web_search_extract_pages: bool = True     # fetch + clean page content for top N results
+    web_search_extract_max: int = 3           # how many pages to extract
+    web_search_extract_timeout_s: float = 8.0  # timeout for page extraction batch
+
+    # Web Search Provider API keys
+    tavily_api_key: str = ""    # A1_TAVILY_API_KEY
+    exa_api_key: str = ""       # A1_EXA_API_KEY
+    brave_api_key: str = ""     # A1_BRAVE_API_KEY
+
+    # ── Provisioning API (OneDesk / platform-to-platform) ─────────────────────
+    # Secret key OneDesk sends in Authorization: Bearer <key> for provisioning calls.
+    # Never used for chat/completion — provisioning only.
+    # Accepts both ALPHERIC_AI_PLATFORM_API_KEY and A1_ALPHERIC_AI_PLATFORM_API_KEY.
+    alpheric_ai_platform_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ALPHERIC_AI_PLATFORM_API_KEY",
+            "A1_ALPHERIC_AI_PLATFORM_API_KEY",
+        ),
+    )
+    alpheric_ai_base_url: str = Field(
+        default="https://atlas.alpheric.ai/v1",
+        validation_alias=AliasChoices("ALPHERIC_AI_BASE_URL", "A1_ALPHERIC_AI_BASE_URL"),
+    )
+    alpheric_ai_default_model: str = Field(
+        default="Atlas",
+        validation_alias=AliasChoices("ALPHERIC_AI_DEFAULT_MODEL", "A1_ALPHERIC_AI_DEFAULT_MODEL"),
+    )
+    atlas_api_key_prefix: str = Field(
+        default="sk-atlas",
+        validation_alias=AliasChoices("ATLAS_API_KEY_PREFIX", "A1_ATLAS_API_KEY_PREFIX"),
+    )
+    # Provisioning rate limit (requests per minute per IP)
+    provision_rate_limit_rpm: int = 10              # A1_PROVISION_RATE_LIMIT_RPM
+
+    # File uploads
+    upload_dir: str = "/var/www/dev/atlas/uploads"  # A1_UPLOAD_DIR
+    upload_max_bytes: int = 512 * 1024 * 1024        # A1_UPLOAD_MAX_BYTES (512 MB)
 
 
 settings = Settings()
