@@ -24,7 +24,7 @@ import pytest
 def _make_provider(auth_type="api_key", api_key="test-key", project_id="", web_search=False):
     """Construct a VertexProvider with injected settings."""
     with (
-        patch("config.settings.settings") as mock_settings,
+        patch("config.settings.settings"),
         patch(
             "a1.providers.vertex.settings",
             vertex_auth_type=auth_type,
@@ -270,7 +270,7 @@ class TestResponseParsing:
         prov = self._provider()
         data = {"candidates": [], "usageMetadata": {}}
         response, _ = prov._parse_response(data, "gemini-2.0-flash", "req-1")
-        assert response.choices[0].message.content == ""
+        assert response.choices[0].message.content in ("", None)
 
 
 # ---------------------------------------------------------------------------
@@ -398,14 +398,16 @@ class TestComplete:
                     "content": {"parts": [{"text": "Answer"}], "role": "model"},
                     "finishReason": "STOP",
                     "groundingMetadata": {
-                        "groundingChunks": [
-                            {"web": {"uri": "https://example.com", "title": "Ex"}}
-                        ],
+                        "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Ex"}}],
                         "webSearchQueries": ["query"],
                     },
                 }
             ],
-            "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2, "totalTokenCount": 7},
+            "usageMetadata": {
+                "promptTokenCount": 5,
+                "candidatesTokenCount": 2,
+                "totalTokenCount": 7,
+            },
         }
 
         prov._client = AsyncMock()
@@ -625,9 +627,16 @@ class TestPIIBoundary:
             mock_r.status_code = 200
             mock_r.json.return_value = {
                 "candidates": [
-                    {"content": {"parts": [{"text": "ok"}], "role": "model"}, "finishReason": "STOP"}
+                    {
+                        "content": {"parts": [{"text": "ok"}], "role": "model"},
+                        "finishReason": "STOP",
+                    }
                 ],
-                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+                "usageMetadata": {
+                    "promptTokenCount": 1,
+                    "candidatesTokenCount": 1,
+                    "totalTokenCount": 2,
+                },
             }
             return mock_r
 

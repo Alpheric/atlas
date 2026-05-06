@@ -29,7 +29,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -95,10 +95,10 @@ def _generate_key() -> tuple[str, str, str]:
     key_prefix — first 18 chars for display
     """
     prefix = settings.atlas_api_key_prefix  # "sk-atlas"
-    token = secrets.token_urlsafe(32)       # 43 chars of URL-safe random
+    token = secrets.token_urlsafe(32)  # 43 chars of URL-safe random
     raw_key = f"{prefix}-{token}"
     key_hash = _hash(raw_key)
-    key_prefix = raw_key[:18]              # "sk-atlas-xxxxxxxxx" — safe to display
+    key_prefix = raw_key[:18]  # "sk-atlas-xxxxxxxxx" — safe to display
     return raw_key, key_hash, key_prefix
 
 
@@ -246,7 +246,7 @@ async def provision_tenant(
                 alpheric_key_id=str(key_record.id),
                 action="provisioned",
                 status="success",
-                safe_message=f"New key provisioned for tenant '{body.tenant_id}' via '{body.source}'.",
+                safe_message=f"New key provisioned for '{body.tenant_id}' via '{body.source}'.",
                 request=request,
             )
 
@@ -259,7 +259,7 @@ async def provision_tenant(
                 "success": True,
                 "alpheric_account_id": f"acct_{body.tenant_id}",
                 "alpheric_key_id": str(key_record.id),
-                "api_key": raw_key,   # ← raw key returned ONCE only
+                "api_key": raw_key,  # ← raw key returned ONCE only
                 "base_url": key_record.base_url,
                 "default_model": key_record.default_model,
                 "status": "active",
@@ -350,7 +350,7 @@ async def rotate_key(
                 "success": True,
                 "old_key_id": old_key_id,
                 "new_key_id": str(new_key.id),
-                "api_key": raw_key,   # ← raw new key returned ONCE only
+                "api_key": raw_key,  # ← raw new key returned ONCE only
                 "status": "active",
                 "rotated_at": new_key.rotated_at.isoformat(),
             }
@@ -486,10 +486,12 @@ async def key_status(
                 )
             ).all()
 
-            req_today = sum(1 for r in usage_rows if r.created_at and r.created_at >= today_start)
-            tok_today = sum(r.toks for r in usage_rows if r.created_at and r.created_at >= today_start)
-            req_month = sum(1 for r in usage_rows if r.created_at and r.created_at >= month_start)
-            tok_month = sum(r.toks for r in usage_rows if r.created_at and r.created_at >= month_start)
+            sum(1 for r in usage_rows if r.created_at and r.created_at >= today_start)
+            tok_today = sum(
+                r.toks for r in usage_rows if r.created_at and r.created_at >= today_start
+            )
+            sum(1 for r in usage_rows if r.created_at and r.created_at >= month_start)
+            sum(r.toks for r in usage_rows if r.created_at and r.created_at >= month_start)
 
             await _audit(
                 db,
@@ -511,7 +513,7 @@ async def key_status(
                 "created_at": key.created_at.isoformat(),
                 "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
                 "usage": {
-                    "requests_today": key.requests_total,   # simplified — full breakdown below
+                    "requests_today": key.requests_total,  # simplified — full breakdown below
                     "tokens_today": tok_today,
                     "requests_month": key.requests_total,
                     "tokens_month": key.tokens_total,

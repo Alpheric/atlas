@@ -17,6 +17,7 @@ markers to stored source records.
 
 import asyncio
 import hashlib
+import re as _re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -37,15 +38,12 @@ log = get_logger("search.pipeline")
 # ---------------------------------------------------------------------------
 
 _BLOCK_PATTERNS = [
-    # Internal secret patterns
-    r"(?i)\b(sk-[a-z0-9]{32,}|AKIA[A-Z0-9]{16})\b",        # API/AWS keys
-    r"(?i)\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b",                    # SSN
-    r"(?i)\b(?:\d{4}[- ]?){3}\d{4}\b",                        # credit card
-    r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b",      # email
+    r"(?i)\b(sk-[a-z0-9]{32,}|AKIA[A-Z0-9]{16})\b",  # API/AWS keys
+    r"(?i)\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b",  # SSN
+    r"(?i)\b(?:\d{4}[- ]?){3}\d{4}\b",  # credit card
+    r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b",  # email
     r"(?i)\b(password|passwd|secret|private_key)\s*[=:]\s*\S+",  # key=value
 ]
-
-import re as _re
 
 _COMPILED_BLOCKS = [_re.compile(p) for p in _BLOCK_PATTERNS]
 
@@ -73,11 +71,11 @@ class SearchContext:
     results: list[SearchResult] = field(default_factory=list)
     pages: list[ExtractedPage] = field(default_factory=list)
     citations: list[Citation] = field(default_factory=list)
-    context_block: str = ""          # the formatted text injected into the prompt
+    context_block: str = ""  # the formatted text injected into the prompt
     latency_ms: int = 0
     blocked: bool = False
     block_reason: str = ""
-    search_reason: str = ""          # why we searched ("high_intent", etc.)
+    search_reason: str = ""  # why we searched ("high_intent", etc.)
     intent_score: int = 0
 
 
@@ -90,10 +88,8 @@ def _vertex_search_available() -> bool:
     """True when Vertex is healthy and web search grounding is enabled."""
     try:
         from a1.providers.registry import provider_registry
-        return (
-            settings.vertex_web_search_enabled
-            and provider_registry.is_healthy("vertex")
-        )
+
+        return settings.vertex_web_search_enabled and provider_registry.is_healthy("vertex")
     except Exception:
         return False
 
@@ -158,11 +154,12 @@ async def maybe_search(
             intent_score=score,
             # No results/pages/citations yet — grounding metadata comes back
             # from VertexProvider.complete() after the LLM call.
-            context_block="",   # no injected block needed; grounding is inline
+            context_block="",  # no injected block needed; grounding is inline
         )
         # Record metric
         try:
             from a1.common.metrics import metrics
+
             metrics.record_search(provider="vertex_grounding", latency_ms=0, result_count=0)
         except Exception:
             pass
@@ -235,6 +232,7 @@ async def maybe_search(
 
     # Record in-memory metrics
     from a1.common.metrics import metrics
+
     metrics.record_search(provider=provider_name, latency_ms=latency_ms, result_count=len(results))
 
     return ctx
@@ -262,7 +260,9 @@ def inject_search_context(messages: list, ctx: SearchContext) -> list:
         role = getattr(msg, "role", "") if not isinstance(msg, dict) else msg.get("role", "")
         if role == "system":
             # Append search context to existing system message
-            existing = getattr(msg, "content", "") if not isinstance(msg, dict) else msg.get("content", "")
+            existing = (
+                getattr(msg, "content", "") if not isinstance(msg, dict) else msg.get("content", "")
+            )
             combined = (existing or "").rstrip() + "\n\n" + context_block
             new_msg = MessageInput(role="system", content=combined)
             new_messages.append(new_msg)
@@ -309,7 +309,7 @@ def _build_context_block(
         "",
         "**Instructions:**",
         "- Answer ONLY from the sources below.",
-        "- Include inline citations using [N] markers (e.g. 'Python 3.12 released in October 2023 [1]').",
+        "- Include inline citations using [N] markers (e.g. 'Python 3.12 [1]').",
         "- If the sources don't contain enough information, say so clearly.",
         "- Do NOT fabricate facts not present in the sources.",
         "",
@@ -351,6 +351,7 @@ def _mask_query(query: str) -> str:
     """Apply PII masking to the search query before sending to external APIs."""
     try:
         from a1.security.pii_masker import pii_masker
+
         result = pii_masker.mask(query)
         # mask() returns a MaskResult object with .masked_text attribute
         return result.masked_text if hasattr(result, "masked_text") else str(result)
@@ -365,9 +366,7 @@ def _record_blocked(
     atlas_model: str | None,
 ) -> None:
     """Fire-and-forget: record a blocked search attempt."""
-    asyncio.create_task(
-        _persist_blocked_run(query, reason, workspace_id, atlas_model)
-    )
+    asyncio.create_task(_persist_blocked_run(query, reason, workspace_id, atlas_model))
 
 
 # ---------------------------------------------------------------------------
@@ -425,9 +424,7 @@ async def _persist_search_run(
                 if not page.ok:
                     continue
                 # Find matching result by URL
-                rank = next(
-                    (r["rank"] for r in ctx.results if r["url"] == page.url), None
-                )
+                rank = next((r["rank"] for r in ctx.results if r["url"] == page.url), None)
                 if rank is None:
                     continue
                 result_id = result_id_map.get(rank)

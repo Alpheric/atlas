@@ -94,7 +94,9 @@ async def _verify_key(
             )
         # Valid DB key — update last_used timestamp in background
         import asyncio
+
         from a1.common.auth import _update_key_last_used
+
         asyncio.create_task(_update_key_last_used(key_h))
 
     _, _, rate_limit = await _resolve_key_info(key_h)
@@ -165,9 +167,7 @@ def _parse_system(system: Any) -> str | None:
         return system
     if isinstance(system, list):
         parts = [
-            b.get("text", "")
-            for b in system
-            if isinstance(b, dict) and b.get("type") == "text"
+            b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"
         ]
         return "\n".join(p for p in parts if p) or None
     return str(system)
@@ -197,7 +197,7 @@ def _anthropic_tools_to_openai(tools: list[dict]) -> list[ToolDef]:
     """Anthropic tool schema → OpenAI ToolDef.
 
     Anthropic: {"name": "...", "description": "...", "input_schema": {...}}
-    OpenAI:    {"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
+    OpenAI:    {"type": "function", "function": {"name": "...", "parameters": {...}}}
     """
     result: list[ToolDef] = []
     for t in tools:
@@ -209,9 +209,7 @@ def _anthropic_tools_to_openai(tools: list[dict]) -> list[ToolDef]:
                 function=FunctionDef(
                     name=t.get("name", ""),
                     description=t.get("description", ""),
-                    parameters=t.get(
-                        "input_schema", {"type": "object", "properties": {}}
-                    ),
+                    parameters=t.get("input_schema", {"type": "object", "properties": {}}),
                 ),
             )
         )
@@ -355,12 +353,12 @@ async def _sse_messages_stream(
         # 4. stream deltas
         output_tokens = 0
         last_ping = time.monotonic()
-        PING_INTERVAL = 10.0
+        ping_interval = 10.0
 
         async for chunk in chunk_iterator:
             # Periodic ping to prevent proxy/client timeouts on long generations
             now = time.monotonic()
-            if now - last_ping >= PING_INTERVAL:
+            if now - last_ping >= ping_interval:
                 yield _evt("ping", {"type": "ping"})
                 last_ping = now
 
@@ -461,13 +459,15 @@ async def messages_api(
     if not any(m.role != "system" for m in pipeline_messages):
         raise HTTPException(
             status_code=400,
-            detail=_make_error("invalid_request_error", "'messages' must contain at least one user turn."),
+            detail=_make_error(
+                "invalid_request_error", "'messages' must contain at least one user turn."
+            ),
         )
 
     # Raw user input for session tracking
-    raw_user_input = next(
-        (m.content for m in reversed(pipeline_messages) if m.role == "user"), ""
-    ) or ""
+    raw_user_input = (
+        next((m.content for m in reversed(pipeline_messages) if m.role == "user"), "") or ""
+    )
 
     # tools (Anthropic → OpenAI format)
     raw_tools = body.get("tools")
@@ -509,8 +509,10 @@ async def messages_api(
 
     # --- Error ---
     if result.error and not result.assistant_text:
-        status_code = 529 if result.error_type == "rate_limit_error" else (
-            503 if result.error_type == "provider_error" else 500
+        status_code = (
+            529
+            if result.error_type == "rate_limit_error"
+            else (503 if result.error_type == "provider_error" else 500)
         )
         raise HTTPException(
             status_code=status_code,
@@ -569,7 +571,9 @@ async def messages_api(
         # Fire-and-forget quality signal persist
         if not result.cache_hit and result.quality_score > 0:
             import asyncio as _asyncio
+
             from a1.healing.quality_scorer import score_and_store as _score_and_store
+
             _asyncio.create_task(
                 _score_and_store(result.assistant_text or "", result.task_type, str(asst_msg.id))
             )

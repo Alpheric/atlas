@@ -34,6 +34,7 @@ async def list_providers():
     cli_provider = provider_registry.get_provider("claude-cli")
     if cli_provider is not None:
         from a1.providers.claude_cli import ClaudeCLIPool
+
         if isinstance(cli_provider, ClaudeCLIPool):
             for p in providers:
                 if p["name"] == "claude-cli":
@@ -42,6 +43,7 @@ async def list_providers():
 
     # Enrich vertex entry with config info
     from config.settings import settings as _s
+
     for p in providers:
         if p["name"] == "vertex":
             p["auth_type"] = _s.vertex_auth_type
@@ -53,17 +55,22 @@ async def list_providers():
     # Add Veo if configured (separate from vertex provider registry)
     if _s.vertex_project_id:
         from a1.providers.veo import veo_provider
-        providers.append({
-            "name": "veo",
-            "healthy": bool(_s.vertex_project_id),  # assume ok if project set; health checked separately
-            "models": [m["name"] for m in veo_provider.list_models()],
-            "model_count": len(veo_provider.list_models()),
-            "project_id": _s.vertex_project_id,
-            "supports_vision": True,
-            "supports_streaming": False,
-            "supports_tools": False,
-            "description": "Google Veo — text-to-video & image-to-video generation",
-        })
+
+        providers.append(
+            {
+                "name": "veo",
+                "healthy": bool(
+                    _s.vertex_project_id
+                ),  # assume ok if project set; health checked separately
+                "models": [m["name"] for m in veo_provider.list_models()],
+                "model_count": len(veo_provider.list_models()),
+                "project_id": _s.vertex_project_id,
+                "supports_vision": True,
+                "supports_streaming": False,
+                "supports_tools": False,
+                "description": "Google Veo — text-to-video & image-to-video generation",
+            }
+        )
 
     return {"data": providers}
 
@@ -110,55 +117,64 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
 
     # Append Claude CLI pool accounts (runtime, not DB-persisted)
     from a1.providers.claude_cli import ClaudeCLIPool
+
     cli = provider_registry.get_provider("claude-cli")
     if isinstance(cli, ClaudeCLIPool):
         for s in cli.pool_status():
-            data.append({
-                "id": f"cli:{s['user']}",
-                "provider": "claude-cli",
-                "name": s["user"],
-                "is_active": s["healthy"],
-                "priority": 10,
-                "rate_limit_rpm": None,
-                "monthly_budget_usd": None,
-                "current_month_cost_usd": round(s.get("cost_usd", 0.0), 6),
-                "total_requests": s.get("requests", 0),
-                "total_tokens": s.get("input_tokens", 0) + s.get("output_tokens", 0),
-                "last_used_at": None,
-                "last_error": None if s["healthy"] else "Not logged in — run: claude login",
-                "created_at": None,
-                "cli_path": s.get("cli_path"),
-                "active_sessions": s.get("sessions", 0),
-            })
+            data.append(
+                {
+                    "id": f"cli:{s['user']}",
+                    "provider": "claude-cli",
+                    "name": s["user"],
+                    "is_active": s["healthy"],
+                    "priority": 10,
+                    "rate_limit_rpm": None,
+                    "monthly_budget_usd": None,
+                    "current_month_cost_usd": round(s.get("cost_usd", 0.0), 6),
+                    "total_requests": s.get("requests", 0),
+                    "total_tokens": s.get("input_tokens", 0) + s.get("output_tokens", 0),
+                    "last_used_at": None,
+                    "last_error": None if s["healthy"] else "Not logged in — run: claude login",
+                    "created_at": None,
+                    "cli_path": s.get("cli_path"),
+                    "active_sessions": s.get("sessions", 0),
+                }
+            )
 
     # Append Vertex account (runtime, configured via .env — not DB-persisted)
     from config.settings import settings as _s
+
     vertex = provider_registry.get_provider("vertex")
     if vertex:
         vertex_healthy = provider_registry.is_healthy("vertex")
         auth_label = (
-            f"Project: {_s.vertex_project_id}" if _s.vertex_auth_type == "service_account"
+            f"Project: {_s.vertex_project_id}"
+            if _s.vertex_auth_type == "service_account"
             else f"API Key: {'*' * 8 + _s.vertex_api_key[-4:] if _s.vertex_api_key else 'not set'}"
         )
-        data.append({
-            "id": "vertex:env",
-            "provider": "vertex",
-            "name": f"Gemini ({_s.vertex_default_model or 'gemini-2.5-pro'})",
-            "is_active": vertex_healthy,
-            "priority": 20,
-            "rate_limit_rpm": None,
-            "monthly_budget_usd": None,
-            "current_month_cost_usd": 0.0,
-            "total_requests": 0,
-            "total_tokens": 0,
-            "last_used_at": None,
-            "last_error": None if vertex_healthy else "Vertex unhealthy — check API key / project",
-            "created_at": None,
-            "auth_type": _s.vertex_auth_type,
-            "auth_label": auth_label,
-            "project_id": _s.vertex_project_id,
-            "default_model": _s.vertex_default_model,
-        })
+        data.append(
+            {
+                "id": "vertex:env",
+                "provider": "vertex",
+                "name": f"Gemini ({_s.vertex_default_model or 'gemini-2.5-pro'})",
+                "is_active": vertex_healthy,
+                "priority": 20,
+                "rate_limit_rpm": None,
+                "monthly_budget_usd": None,
+                "current_month_cost_usd": 0.0,
+                "total_requests": 0,
+                "total_tokens": 0,
+                "last_used_at": None,
+                "last_error": None
+                if vertex_healthy
+                else "Vertex unhealthy — check API key / project",
+                "created_at": None,
+                "auth_type": _s.vertex_auth_type,
+                "auth_label": auth_label,
+                "project_id": _s.vertex_project_id,
+                "default_model": _s.vertex_default_model,
+            }
+        )
 
     return {"data": data}
 
@@ -229,7 +245,11 @@ async def test_account(account_id: str, db: AsyncSession = Depends(get_db)):
             )
             resp = await account_obj.complete(req)
             content = resp.choices[0].message.content if resp.choices else ""
-            return {"status": "ok", "message": f"Account active — response: {content.strip()}", "user": unix_user}
+            return {
+                "status": "ok",
+                "message": f"Account active — response: {content.strip()}",
+                "user": unix_user,
+            }
         except Exception as e:
             return {"status": "error", "message": str(e), "user": unix_user}
 
@@ -243,9 +263,8 @@ async def test_account(account_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(400, f"Invalid account ID: {account_id}")
 
     from sqlalchemy import select as sa_select
-    result = await db.execute(
-        sa_select(ProviderAccount).where(ProviderAccount.id == account_uuid)
-    )
+
+    result = await db.execute(sa_select(ProviderAccount).where(ProviderAccount.id == account_uuid))
     account = result.scalar_one_or_none()
     if not account:
         raise HTTPException(404, "Account not found")
@@ -340,12 +359,12 @@ async def playground(body: dict):
         messages.append(MessageInput(role="system", content=system_prompt))
     messages.append(MessageInput(role="user", content=prompt))
 
-    # Resolve Atlas model aliases (Atlas, atlas-*, alpheric-1, auto, local) to actual provider model
-    _ATLAS_ALIASES = {"Atlas", "alpheric-1", "auto", "auto:fast", "auto:cheap", "local"}
-    _ATLAS_DEFAULT_MODEL = "claude-sonnet-4-20250514"
+    # Resolve Atlas model aliases to actual provider model
+    _atlas_aliases = {"Atlas", "alpheric-1", "auto", "auto:fast", "auto:cheap", "local"}
+    _atlas_default_model = "claude-sonnet-4-20250514"
     actual_model = model
-    if model.startswith("atlas-") or model.lower().startswith("atlas") or model in _ATLAS_ALIASES:
-        actual_model = _ATLAS_DEFAULT_MODEL
+    if model.startswith("atlas-") or model.lower().startswith("atlas") or model in _atlas_aliases:
+        actual_model = _atlas_default_model
 
     provider = provider_registry.get_provider_for_model(actual_model)
     if not provider:
@@ -384,11 +403,13 @@ async def playground(body: dict):
 
 # --- OpenClaw Gateway ---
 
+
 @router.get("/openclaw/status")
 async def openclaw_status():
     """Return OpenClaw gateway connectivity status and discovered models."""
-    from config.settings import settings
     import httpx
+
+    from config.settings import settings
 
     url = settings.openclaw_url
     if not url:
@@ -410,8 +431,9 @@ async def openclaw_status():
 @router.post("/openclaw/discover")
 async def openclaw_discover():
     """Trigger model discovery on the OpenClaw gateway."""
-    from config.settings import settings
     import httpx
+
+    from config.settings import settings
 
     url = settings.openclaw_url
     if not url:
@@ -429,8 +451,9 @@ async def openclaw_discover():
 @router.post("/openclaw/import-history")
 async def openclaw_import_history(limit: int = 1000):
     """Import conversation history from the OpenClaw gateway."""
-    from config.settings import settings
     import httpx
+
+    from config.settings import settings
 
     url = settings.openclaw_url
     if not url:
@@ -440,7 +463,11 @@ async def openclaw_import_history(limit: int = 1000):
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.get(f"{url}/conversations", params={"limit": limit})
             if r.status_code != 200:
-                return {"status": "error", "error": f"Gateway returned {r.status_code}", "imported": 0}
+                return {
+                    "status": "error",
+                    "error": f"Gateway returned {r.status_code}",
+                    "imported": 0,
+                }
             conversations = r.json().get("data", [])
             return {"status": "ok", "imported": len(conversations)}
     except Exception as e:

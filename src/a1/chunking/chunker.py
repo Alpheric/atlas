@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from copy import deepcopy
 
 from a1.common.logging import get_logger
 from a1.common.tokens import count_tokens
@@ -30,15 +29,16 @@ log = get_logger("chunking")
 # Settings
 # ---------------------------------------------------------------------------
 
-_CHUNK_OVERLAP_TOKENS = 200      # overlap between adjacent chunks to preserve context
-_MAX_PARALLEL_CHUNKS = 6         # concurrent provider calls during Map phase
-_OUTPUT_RESERVE_TOKENS = 1024    # tokens reserved for model output per chunk call
-_SYSTEM_RESERVE_TOKENS = 512     # tokens reserved for system prompt injection
+_CHUNK_OVERLAP_TOKENS = 200  # overlap between adjacent chunks to preserve context
+_MAX_PARALLEL_CHUNKS = 6  # concurrent provider calls during Map phase
+_OUTPUT_RESERVE_TOKENS = 1024  # tokens reserved for model output per chunk call
+_SYSTEM_RESERVE_TOKENS = 512  # tokens reserved for system prompt injection
 
 
 # ---------------------------------------------------------------------------
 # Text splitting
 # ---------------------------------------------------------------------------
+
 
 def _split_paragraphs(text: str) -> list[str]:
     """Split text on double-newlines; fall back to single newlines."""
@@ -102,6 +102,7 @@ def split_into_chunks(text: str, max_tokens: int, overlap_tokens: int | None = N
 # MapReduce pipeline
 # ---------------------------------------------------------------------------
 
+
 def _extract_query(messages: list[MessageInput]) -> str:
     """Extract the user's query (last non-empty user message)."""
     for msg in reversed(messages):
@@ -138,7 +139,8 @@ async def _map_chunk(
         f"---\n"
         f"Using ONLY the content in this chunk, answer the following as completely as possible:\n"
         f"{query}\n\n"
-        f"If this chunk does not contain relevant information, say 'No relevant information in this chunk.'"
+        f"If this chunk does not contain relevant information, say "
+        f"'No relevant information in this chunk.'"
     )
     req = ChatCompletionRequest(
         model=model,
@@ -178,7 +180,7 @@ async def _reduce(
 
     reduce_prompt = (
         f"The following are partial answers to the question:\n"
-        f"\"{query}\"\n\n"
+        f'"{query}"\n\n'
         f"Each partial answer was derived from one chunk of a large document:\n\n"
         f"{answers_text}\n\n"
         f"---\n"
@@ -210,7 +212,13 @@ async def chunk_and_reduce(
 
     # Tokens available per chunk call (window minus system + overhead + output)
     system_tokens = sum(count_tokens(m.content or "") for m in system_msgs)
-    chunk_max = provider_context_window - system_tokens - _OUTPUT_RESERVE_TOKENS - _SYSTEM_RESERVE_TOKENS - 256
+    chunk_max = (
+        provider_context_window
+        - system_tokens
+        - _OUTPUT_RESERVE_TOKENS
+        - _SYSTEM_RESERVE_TOKENS
+        - 256
+    )
     chunk_max = max(chunk_max, 1000)  # safety floor
 
     # Find and split the largest message
@@ -265,6 +273,9 @@ async def chunk_and_reduce(
 # Context overflow detection
 # ---------------------------------------------------------------------------
 
-def needs_chunking(total_tokens: int, provider_context_window: int, threshold: float = 0.85) -> bool:
+
+def needs_chunking(
+    total_tokens: int, provider_context_window: int, threshold: float = 0.85
+) -> bool:
     """Return True if token count exceeds threshold * context_window."""
     return total_tokens > int(provider_context_window * threshold)

@@ -18,10 +18,17 @@ Tests all 13 required scenarios:
 
 import hashlib
 import logging
+import os
+from unittest.mock import AsyncMock, patch
+
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
-from unittest.mock import patch, AsyncMock
+from httpx import ASGITransport, AsyncClient
+
+pytestmark = pytest.mark.skipif(
+    "postgresql" not in os.getenv("A1_DATABASE_URL", ""),
+    reason="Provisioning tests require PostgreSQL",
+)
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -33,6 +40,7 @@ FAKE_ATLAS_KEY = "sk-atlas-FwcHfmI5qWzbohi2prMoixYBHAxEoxKEtN4qK2K9i38"
 def set_platform_key(monkeypatch):
     """Inject a test platform key into settings."""
     from config.settings import settings
+
     monkeypatch.setattr(settings, "alpheric_ai_platform_api_key", PLATFORM_KEY)
     monkeypatch.setattr(settings, "alpheric_ai_base_url", "https://atlas.alpheric.ai/v1")
     monkeypatch.setattr(settings, "alpheric_ai_default_model", "Atlas")
@@ -42,10 +50,9 @@ def set_platform_key(monkeypatch):
 @pytest_asyncio.fixture
 async def client():
     from a1.app import create_app
+
     app = create_app()
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 
@@ -58,6 +65,7 @@ def sha256(s: str) -> str:
 
 
 # ── Helper: provision a tenant and return response ────────────────────────────
+
 
 async def _provision(client, tenant_id: str = "test_tenant_001", **kwargs) -> dict:
     body = {
@@ -74,6 +82,7 @@ async def _provision(client, tenant_id: str = "test_tenant_001", **kwargs) -> di
 
 # ── Test 1: Missing platform key → 401 ───────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_01_missing_platform_key(client):
     r = await client.post(
@@ -85,6 +94,7 @@ async def test_01_missing_platform_key(client):
 
 
 # ── Test 2: Invalid platform key → 401 ───────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_02_invalid_platform_key(client):
@@ -98,6 +108,7 @@ async def test_02_invalid_platform_key(client):
 
 # ── Test 3: Valid key provisions tenant ───────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_03_provision_tenant(client):
     data = await _provision(client, "tenant_test_03")
@@ -110,6 +121,7 @@ async def test_03_provision_tenant(client):
 
 # ── Test 4: Idempotent — provision same tenant twice ──────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_04_idempotent_provision(client):
     first = await _provision(client, "tenant_test_04")
@@ -117,11 +129,12 @@ async def test_04_idempotent_provision(client):
 
     second = await _provision(client, "tenant_test_04")
     assert second["already_exists"] is True
-    assert second["api_key"] is None   # raw key NOT returned on duplicate
+    assert second["api_key"] is None  # raw key NOT returned on duplicate
     assert second["alpheric_key_id"] == first["alpheric_key_id"]  # same key id
 
 
 # ── Test 5: Rotate key ────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_05_rotate_key(client):
@@ -160,6 +173,7 @@ async def test_05_rotate_key(client):
 
 # ── Test 6: Disabled key cannot use /v1/chat/completions ─────────────────────
 
+
 @pytest.mark.asyncio
 async def test_06_disabled_key_blocked(client):
     pdata = await _provision(client, "tenant_test_06")
@@ -181,7 +195,8 @@ async def test_06_disabled_key_blocked(client):
 
     # Attempt chat completion — must be rejected
     from config.settings import settings
-    original = list(settings.api_keys)
+
+    list(settings.api_keys)
     # Ensure tenant key is NOT in master list
     assert tenant_key not in settings.api_keys
 
@@ -198,6 +213,7 @@ async def test_06_disabled_key_blocked(client):
 
 
 # ── Test 7: key-status never returns raw API key ──────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_07_status_no_raw_key(client):
@@ -219,9 +235,11 @@ async def test_07_status_no_raw_key(client):
 
 # ── Test 8: Chat completion works with valid tenant key (mock routing) ─────────
 
+
 @pytest.mark.asyncio
 async def test_08_chat_works_with_tenant_key(client):
     from config.settings import settings
+
     pdata = await _provision(client, "tenant_test_08")
     tenant_key = pdata["api_key"]
 
@@ -231,6 +249,7 @@ async def test_08_chat_works_with_tenant_key(client):
 
     # Mock the pipeline to avoid actual LLM calls
     from a1.proxy.core_pipeline import CorePipeline, CorePipelineResult
+
     mock_result = CorePipelineResult(
         assistant_text="Hello from Atlas",
         provider_name="vertex",
@@ -256,9 +275,11 @@ async def test_08_chat_works_with_tenant_key(client):
 
 # ── Test 9: Platform key cannot be used for chat completion ───────────────────
 
+
 @pytest.mark.asyncio
 async def test_09_platform_key_rejected_for_chat(client):
     from config.settings import settings
+
     # Platform key should NOT be in api_keys list
     assert PLATFORM_KEY not in settings.api_keys
     r = await client.post(
@@ -271,23 +292,25 @@ async def test_09_platform_key_rejected_for_chat(client):
 
 # ── Test 10: Raw key never stored in DB ───────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_10_raw_key_not_in_db(client):
+    from sqlalchemy import select
+
     from a1.db.engine import async_session
     from a1.db.models import AtlasApiKey
-    from sqlalchemy import select
 
     pdata = await _provision(client, "tenant_test_10")
     raw_key = pdata["api_key"]
     key_id = pdata["alpheric_key_id"]
 
     async with async_session() as session:
-        row = (await session.execute(
-            select(AtlasApiKey).where(AtlasApiKey.id == key_id)
-        )).scalar_one_or_none()
+        row = (
+            await session.execute(select(AtlasApiKey).where(AtlasApiKey.id == key_id))
+        ).scalar_one_or_none()
 
     assert row is not None
-    assert row.key_hash == sha256(raw_key)   # hash stored correctly
+    assert row.key_hash == sha256(raw_key)  # hash stored correctly
     assert raw_key not in (row.key_prefix or "")  # prefix is only first 18 chars
     # Ensure raw key is NOT stored anywhere in the row's string representation
     row_str = str(row.__dict__)
@@ -295,6 +318,7 @@ async def test_10_raw_key_not_in_db(client):
 
 
 # ── Test 11: Raw key never logged ────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_11_raw_key_not_logged(client, caplog):
@@ -307,20 +331,28 @@ async def test_11_raw_key_not_logged(client, caplog):
 
 # ── Test 12: Audit logs are created ──────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_12_audit_logs_created(client):
+    from sqlalchemy import select
+
     from a1.db.engine import async_session
     from a1.db.models import ProvisioningAuditLog
-    from sqlalchemy import select
 
     await _provision(client, "tenant_test_12")
 
     async with async_session() as session:
-        rows = (await session.execute(
-            select(ProvisioningAuditLog)
-            .where(ProvisioningAuditLog.tenant_id == "tenant_test_12")
-            .order_by(ProvisioningAuditLog.created_at.desc())
-        )).scalars().all()
+        rows = (
+            (
+                await session.execute(
+                    select(ProvisioningAuditLog)
+                    .where(ProvisioningAuditLog.tenant_id == "tenant_test_12")
+                    .order_by(ProvisioningAuditLog.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
 
     assert len(rows) >= 1
     row = rows[0]
@@ -331,6 +363,7 @@ async def test_12_audit_logs_created(client):
 
 
 # ── Test 13: base_url is https://atlas.alpheric.ai/v1 ────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_13_base_url_correct(client):

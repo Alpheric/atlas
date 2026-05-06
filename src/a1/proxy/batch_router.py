@@ -57,6 +57,7 @@ _active_tasks: dict[str, asyncio.Task] = {}
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class CreateBatchRequest(BaseModel):
     input_file_id: str
     endpoint: str = "/v1/chat/completions"
@@ -122,6 +123,7 @@ def _to_batch_obj(row: Batch) -> BatchObject:
 # Worker
 # ---------------------------------------------------------------------------
 
+
 async def _set_batch_status(batch_id: str, status: str, **extra_fields) -> None:
     async with async_session() as db:
         values: dict = {"status": status}
@@ -157,16 +159,15 @@ async def _process_one(request_line: dict, api_key: str) -> dict:
 
     try:
         from a1.proxy.core_pipeline import CorePipelineInput, core_pipeline
-        from a1.proxy.request_models import ChatCompletionRequest, MessageInput
+        from a1.proxy.request_models import ChatCompletionRequest
 
         req = ChatCompletionRequest(**body)
         inp = CorePipelineInput(
             request_id=f"batch-{uuid.uuid4().hex[:8]}",
             source="batch",
             messages=list(req.messages),
-            raw_user_input=next(
-                (m.content for m in reversed(req.messages) if m.role == "user"), ""
-            ) or "",
+            raw_user_input=next((m.content for m in reversed(req.messages) if m.role == "user"), "")
+            or "",
             model=req.model,
             max_tokens=req.max_tokens or 1000,
             temperature=req.temperature,
@@ -188,11 +189,13 @@ async def _process_one(request_line: dict, api_key: str) -> dict:
             "object": "chat.completion",
             "created": int(time.time()),
             "model": result.model_name or req.model,
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": result.assistant_text or ""},
-                "finish_reason": "stop",
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": result.assistant_text or ""},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {
                 "prompt_tokens": result.prompt_tokens,
                 "completion_tokens": result.completion_tokens,
@@ -232,13 +235,17 @@ async def _run_batch(batch_id: str, input_path: str, api_key: str) -> None:
 
         total = len(requests)
         if total == 0:
-            await _set_batch_status(batch_id, "failed",
-                                    errors={"message": "Input file has no valid JSONL lines"})
+            await _set_batch_status(
+                batch_id, "failed", errors={"message": "Input file has no valid JSONL lines"}
+            )
             return
 
         if total > _MAX_REQUESTS:
-            await _set_batch_status(batch_id, "failed",
-                                    errors={"message": f"Too many requests: {total} > {_MAX_REQUESTS}"})
+            await _set_batch_status(
+                batch_id,
+                "failed",
+                errors={"message": f"Too many requests: {total} > {_MAX_REQUESTS}"},
+            )
             return
 
         await _set_batch_status(batch_id, "in_progress", total_requests=total)
@@ -252,9 +259,9 @@ async def _run_batch(batch_id: str, input_path: str, api_key: str) -> None:
             async with sem:
                 results[idx] = await _process_one(req, api_key)
                 is_error = results[idx].get("error") is not None
-                await _increment_counts(batch_id,
-                                        completed=0 if is_error else 1,
-                                        failed=1 if is_error else 0)
+                await _increment_counts(
+                    batch_id, completed=0 if is_error else 1, failed=1 if is_error else 0
+                )
 
         await asyncio.gather(*[_do(i, r) for i, r in enumerate(requests)])
 
@@ -272,21 +279,27 @@ async def _run_batch(batch_id: str, input_path: str, api_key: str) -> None:
         async with async_session() as db:
             async with db.begin():
                 from a1.db.models import UploadedFile
-                db.add(UploadedFile(
-                    id=output_file_id,
-                    filename="batch_output.jsonl",
-                    purpose="batch",
-                    bytes_=len(output_jsonl.encode()),
-                    mime_type="application/jsonl",
-                    storage_path=str(out_path),
-                ))
+
+                db.add(
+                    UploadedFile(
+                        id=output_file_id,
+                        filename="batch_output.jsonl",
+                        purpose="batch",
+                        bytes_=len(output_jsonl.encode()),
+                        mime_type="application/jsonl",
+                        storage_path=str(out_path),
+                    )
+                )
 
         failed = sum(1 for r in results if r and r.get("error"))
         completed = total - failed
-        await _set_batch_status(batch_id, "completed",
-                                output_file_id=output_file_id,
-                                completed_requests=completed,
-                                failed_requests=failed)
+        await _set_batch_status(
+            batch_id,
+            "completed",
+            output_file_id=output_file_id,
+            completed_requests=completed,
+            failed_requests=failed,
+        )
         log.info(f"[batch] {batch_id} completed — {completed} ok, {failed} failed")
 
     except asyncio.CancelledError:
@@ -303,6 +316,7 @@ async def _run_batch(batch_id: str, input_path: str, api_key: str) -> None:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.post("/v1/batches", response_model=BatchObject)
 async def create_batch(
     body: CreateBatchRequest,
@@ -311,14 +325,16 @@ async def create_batch(
     if body.endpoint not in _SUPPORTED_ENDPOINTS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported endpoint '{body.endpoint}'. Supported: {sorted(_SUPPORTED_ENDPOINTS)}",
+            detail=(
+                f"Unsupported endpoint '{body.endpoint}'. Supported: {sorted(_SUPPORTED_ENDPOINTS)}"
+            ),
         )
 
     # Resolve input file
     async with async_session() as db:
-        file_row = (await db.execute(
-            select(UploadedFile).where(UploadedFile.id == body.input_file_id)
-        )).scalar_one_or_none()
+        file_row = (
+            await db.execute(select(UploadedFile).where(UploadedFile.id == body.input_file_id))
+        ).scalar_one_or_none()
 
     if not file_row:
         raise HTTPException(status_code=404, detail=f"Input file '{body.input_file_id}' not found.")
@@ -330,15 +346,17 @@ async def create_batch(
 
     async with async_session() as db:
         async with db.begin():
-            db.add(Batch(
-                id=batch_id,
-                input_file_id=body.input_file_id,
-                endpoint=body.endpoint,
-                completion_window=body.completion_window,
-                status="validating",
-                metadata_=body.metadata,
-                created_at=now,
-            ))
+            db.add(
+                Batch(
+                    id=batch_id,
+                    input_file_id=body.input_file_id,
+                    endpoint=body.endpoint,
+                    completion_window=body.completion_window,
+                    status="validating",
+                    metadata_=body.metadata,
+                    created_at=now,
+                )
+            )
 
     # Launch background worker
     task = asyncio.create_task(_run_batch(batch_id, file_row.storage_path, _api_key))
@@ -365,18 +383,22 @@ async def list_batches(
     _api_key: str = Depends(verify_api_key),
 ) -> Any:
     async with async_session() as db:
-        rows = (await db.execute(
-            select(Batch).order_by(Batch.created_at.desc()).limit(min(limit, 100))
-        )).scalars().all()
+        rows = (
+            (
+                await db.execute(
+                    select(Batch).order_by(Batch.created_at.desc()).limit(min(limit, 100))
+                )
+            )
+            .scalars()
+            .all()
+        )
     return [_to_batch_obj(r) for r in rows]
 
 
 @router.get("/v1/batches/{batch_id}", response_model=BatchObject)
 async def get_batch(batch_id: str, _api_key: str = Depends(verify_api_key)) -> Any:
     async with async_session() as db:
-        row = (await db.execute(
-            select(Batch).where(Batch.id == batch_id)
-        )).scalar_one_or_none()
+        row = (await db.execute(select(Batch).where(Batch.id == batch_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
     return _to_batch_obj(row)
@@ -385,9 +407,7 @@ async def get_batch(batch_id: str, _api_key: str = Depends(verify_api_key)) -> A
 @router.post("/v1/batches/{batch_id}/cancel", response_model=BatchObject)
 async def cancel_batch(batch_id: str, _api_key: str = Depends(verify_api_key)) -> Any:
     async with async_session() as db:
-        row = (await db.execute(
-            select(Batch).where(Batch.id == batch_id)
-        )).scalar_one_or_none()
+        row = (await db.execute(select(Batch).where(Batch.id == batch_id))).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
     if row.status in ("completed", "failed", "cancelled", "expired"):
@@ -400,7 +420,5 @@ async def cancel_batch(batch_id: str, _api_key: str = Depends(verify_api_key)) -
     await _set_batch_status(batch_id, "cancelled")
 
     async with async_session() as db:
-        row = (await db.execute(
-            select(Batch).where(Batch.id == batch_id)
-        )).scalar_one_or_none()
+        row = (await db.execute(select(Batch).where(Batch.id == batch_id))).scalar_one_or_none()
     return _to_batch_obj(row)

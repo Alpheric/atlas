@@ -29,7 +29,7 @@ from a1.proxy.pipeline import (
     strip_think_tokens,
 )
 from a1.proxy.request_models import ChatCompletionRequest
-from a1.routing.atlas_models import ATLAS_TASK_MAP, get_shadow_model, resolve_atlas_model
+from a1.routing.atlas_models import ATLAS_TASK_MAP, resolve_atlas_model
 from a1.routing.classifier import classify_task, classify_task_with_fallback
 from a1.routing.smart_router import RoutingDecision, smart_router
 from a1.routing.strategy import select_model
@@ -139,11 +139,11 @@ class CorePipelineResult:
     grounding_metadata: str | None = None  # JSON-serialised GroundingMetadata from Vertex
 
     # Smart routing observability
-    shadow_model: str | None = None       # atlas-* model running in background
-    routing_reason: str = ""              # why this model was selected
+    shadow_model: str | None = None  # atlas-* model running in background
+    routing_reason: str = ""  # why this model was selected
     routing_mode: str = "balanced"
     context_tokens: int = 0
-    is_sticky: bool = False               # re-used session's primary model
+    is_sticky: bool = False  # re-used session's primary model
 
     # Error
     error: str | None = None
@@ -180,20 +180,27 @@ async def _tool_complete_and_stream(provider, req, timeout: float = 25.0, fallba
             break
         except asyncio.TimeoutError:
             label = getattr(prov, "name", str(prov))
-            log.warning(f"[tool_stream] {label} timed out after {timeout}s"
-                        + (" — retrying on fallback" if fallback and attempt == 0 else ""))
+            log.warning(
+                f"[tool_stream] {label} timed out after {timeout}s"
+                + (" — retrying on fallback" if fallback and attempt == 0 else "")
+            )
         except Exception as e:
             label = getattr(prov, "name", str(prov))
-            log.error(f"[tool_stream] {label} error: {e}"
-                      + (" — retrying on fallback" if fallback and attempt == 0 else ""))
+            log.error(
+                f"[tool_stream] {label} error: {e}"
+                + (" — retrying on fallback" if fallback and attempt == 0 else "")
+            )
 
     if resp is None:
         yield ChatCompletionChunk(
-            id=chunk_id, model=model,
-            choices=[StreamChoice(
-                delta=DeltaMessage(content="Tool execution timed out. Please try again."),
-                finish_reason="stop",
-            )],
+            id=chunk_id,
+            model=model,
+            choices=[
+                StreamChoice(
+                    delta=DeltaMessage(content="Tool execution timed out. Please try again."),
+                    finish_reason="stop",
+                )
+            ],
         )
         return
 
@@ -202,41 +209,65 @@ async def _tool_complete_and_stream(provider, req, timeout: float = 25.0, fallba
     if msg and msg.tool_calls:
         for i, tc in enumerate(msg.tool_calls):
             yield ChatCompletionChunk(
-                id=chunk_id, model=model,
-                choices=[StreamChoice(delta=DeltaMessage(tool_calls=[{
-                    "index": i,
-                    "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:8]}"),
-                    "type": "function",
-                    "function": {"name": tc["function"]["name"], "arguments": ""},
-                }]))],
+                id=chunk_id,
+                model=model,
+                choices=[
+                    StreamChoice(
+                        delta=DeltaMessage(
+                            tool_calls=[
+                                {
+                                    "index": i,
+                                    "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:8]}"),
+                                    "type": "function",
+                                    "function": {"name": tc["function"]["name"], "arguments": ""},
+                                }
+                            ]
+                        )
+                    )
+                ],
             )
             yield ChatCompletionChunk(
-                id=chunk_id, model=model,
-                choices=[StreamChoice(delta=DeltaMessage(tool_calls=[{
-                    "index": i,
-                    "function": {"arguments": tc["function"]["arguments"]},
-                }]))],
+                id=chunk_id,
+                model=model,
+                choices=[
+                    StreamChoice(
+                        delta=DeltaMessage(
+                            tool_calls=[
+                                {
+                                    "index": i,
+                                    "function": {"arguments": tc["function"]["arguments"]},
+                                }
+                            ]
+                        )
+                    )
+                ],
             )
         yield ChatCompletionChunk(
-            id=chunk_id, model=model,
+            id=chunk_id,
+            model=model,
             choices=[StreamChoice(delta=DeltaMessage(), finish_reason="tool_calls")],
         )
     else:
         content = (msg.content or "") if msg else ""
         if content:
             yield ChatCompletionChunk(
-                id=chunk_id, model=model,
+                id=chunk_id,
+                model=model,
                 choices=[StreamChoice(delta=DeltaMessage(content=content))],
             )
         yield ChatCompletionChunk(
-            id=chunk_id, model=model,
+            id=chunk_id,
+            model=model,
             choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
         )
 
     if resp.usage:
         from a1.proxy.response_models import Usage
+
         yield ChatCompletionChunk(
-            id=chunk_id, model=model, choices=[],
+            id=chunk_id,
+            model=model,
+            choices=[],
             usage=Usage(
                 prompt_tokens=resp.usage.prompt_tokens,
                 completion_tokens=resp.usage.completion_tokens,
@@ -270,21 +301,37 @@ async def _tool_response_as_stream(resp):
             yield ChatCompletionChunk(
                 id=chunk_id,
                 model=model,
-                choices=[StreamChoice(delta=DeltaMessage(tool_calls=[{
-                    "index": i,
-                    "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:8]}"),
-                    "type": "function",
-                    "function": {"name": tc["function"]["name"], "arguments": ""},
-                }]))],
+                choices=[
+                    StreamChoice(
+                        delta=DeltaMessage(
+                            tool_calls=[
+                                {
+                                    "index": i,
+                                    "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:8]}"),
+                                    "type": "function",
+                                    "function": {"name": tc["function"]["name"], "arguments": ""},
+                                }
+                            ]
+                        )
+                    )
+                ],
             )
             # Arguments chunk
             yield ChatCompletionChunk(
                 id=chunk_id,
                 model=model,
-                choices=[StreamChoice(delta=DeltaMessage(tool_calls=[{
-                    "index": i,
-                    "function": {"arguments": tc["function"]["arguments"]},
-                }]))],
+                choices=[
+                    StreamChoice(
+                        delta=DeltaMessage(
+                            tool_calls=[
+                                {
+                                    "index": i,
+                                    "function": {"arguments": tc["function"]["arguments"]},
+                                }
+                            ]
+                        )
+                    )
+                ],
             )
         # Finish with tool_calls reason
         yield ChatCompletionChunk(
@@ -306,6 +353,7 @@ async def _tool_response_as_stream(resp):
 
     if resp.usage:
         from a1.proxy.response_models import Usage
+
         yield ChatCompletionChunk(
             id=chunk_id,
             model=model,
@@ -328,22 +376,28 @@ async def _text_response_as_stream(resp):
     text = (msg.content or "") if msg else ""
 
     yield ChatCompletionChunk(
-        id=chunk_id, model=model,
+        id=chunk_id,
+        model=model,
         choices=[StreamChoice(delta=DeltaMessage(role="assistant"))],
     )
     if text:
         yield ChatCompletionChunk(
-            id=chunk_id, model=model,
+            id=chunk_id,
+            model=model,
             choices=[StreamChoice(delta=DeltaMessage(content=text))],
         )
     yield ChatCompletionChunk(
-        id=chunk_id, model=model,
+        id=chunk_id,
+        model=model,
         choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
     )
     if resp.usage:
         from a1.proxy.response_models import Usage
+
         yield ChatCompletionChunk(
-            id=chunk_id, model=model, choices=[],
+            id=chunk_id,
+            model=model,
+            choices=[],
             usage=Usage(
                 prompt_tokens=resp.usage.prompt_tokens,
                 completion_tokens=resp.usage.completion_tokens,
@@ -430,6 +484,7 @@ class CorePipeline:
                     else:
                         # External provider path: inject results as system message
                         from a1.search.pipeline import inject_search_context
+
                         inp.messages = inject_search_context(inp.messages, search_ctx)
                         result.web_search_run_id = search_ctx.run_id
 
@@ -499,6 +554,7 @@ class CorePipeline:
             if search_ctx and result.assistant_text and not inp.stream:
                 from a1.search.citation import build_citations, inject_citations_if_missing
                 from a1.search.pipeline import persist_citations
+
                 updated_citations = build_citations(
                     search_ctx.results,
                     result.assistant_text,
@@ -509,9 +565,7 @@ class CorePipeline:
                     result.assistant_text, updated_citations
                 )
                 result.web_citations = updated_citations
-                asyncio.create_task(
-                    persist_citations(search_ctx.run_id, None, updated_citations)
-                )
+                asyncio.create_task(persist_citations(search_ctx.run_id, None, updated_citations))
 
             # Step 7c: Quality score + self-critique gate (non-streaming, external provider only)
             if result.assistant_text and not inp.stream and not result.cache_hit:
@@ -572,6 +626,7 @@ class CorePipeline:
         """Run web search pipeline if intent detected. Returns SearchContext or None."""
         try:
             from a1.search.pipeline import maybe_search
+
             ctx = await maybe_search(
                 messages=inp.messages,
                 task_type=task_type,
@@ -754,6 +809,7 @@ class CorePipeline:
         """Estimate total token count for context-length routing decisions."""
         try:
             from a1.common.tokens import count_tokens
+
             full_text = " ".join(m.content or "" for m in inp.messages if hasattr(m, "content"))
             return count_tokens(full_text)
         except Exception:
@@ -771,9 +827,7 @@ class CorePipeline:
         """Route request to provider and execute."""
         # Vision detection: if any message has image content, force Vertex (only vision provider).
         has_vision = any(
-            getattr(m, "has_images", False)
-            for m in inp.messages
-            if not isinstance(m, dict)
+            getattr(m, "has_images", False) for m in inp.messages if not isinstance(m, dict)
         )
         if has_vision and not getattr(inp, "force_provider", None):
             inp.force_provider = "vertex"  # type: ignore[attr-defined]
@@ -786,6 +840,7 @@ class CorePipeline:
             if vertex and provider_registry.is_healthy("vertex"):
                 model = settings.vertex_default_model or "gemini-2.5-pro"
                 from a1.proxy.request_models import ChatCompletionRequest
+
                 req = ChatCompletionRequest(
                     model=model,
                     messages=inp.messages,
@@ -812,10 +867,13 @@ class CorePipeline:
                 gm = getattr(resp, "grounding_metadata", None)
                 if gm:
                     import json as _json
+
                     result.grounding_metadata = _json.dumps(gm)  # type: ignore[attr-defined]
                 return
             # Vertex unavailable — fall through to normal routing
-            log.warning("[pipeline] Vertex grounding requested but vertex unhealthy — falling through")
+            log.warning(
+                "[pipeline] Vertex grounding requested but vertex unhealthy — falling through"
+            )
 
         # Tool requests: bypass distillation & fast-path.
         # Priority: Vertex (Gemini native function calling) → claude-cli fallback.
@@ -829,7 +887,8 @@ class CorePipeline:
             cli_ok = bool(cli and provider_registry.is_healthy("claude-cli"))
 
             if vertex_ok:
-                vertex_model = settings.vertex_default_model or "gemini-2.5-flash"
+                _vdm = settings.vertex_default_model
+                vertex_model = str(_vdm) if isinstance(_vdm, str) else "gemini-2.5-flash"
                 req = ChatCompletionRequest(
                     model=vertex_model,
                     messages=inp.messages,
@@ -843,7 +902,8 @@ class CorePipeline:
 
                 if inp.stream:
                     result.chunk_iterator = _tool_complete_and_stream(
-                        vertex, req,
+                        vertex,
+                        req,
                         timeout=30.0,
                         fallback=cli if cli_ok else None,
                     )
@@ -856,9 +916,12 @@ class CorePipeline:
                 try:
                     resp = await asyncio.wait_for(vertex.complete(req), timeout=30.0)
                 except (asyncio.TimeoutError, Exception) as e:
-                    log.warning(f"[pipeline] vertex tool call failed ({e}) — falling back to claude-cli")
+                    log.warning(
+                        f"[pipeline] vertex tool call failed ({e}) — falling back to claude-cli"
+                    )
                     if cli_ok:
                         from a1.training.auto_trainer import _get_external_provider
+
                         _, _, ext_model = _get_external_provider(atlas_model)
                         cli_req = ChatCompletionRequest(
                             model=ext_model or atlas_model,
@@ -886,6 +949,7 @@ class CorePipeline:
             # ── Vertex unavailable — go directly to claude-cli ───────────────────
             if cli_ok:
                 from a1.training.auto_trainer import _get_external_provider
+
                 _, _, ext_model = _get_external_provider(atlas_model)
                 req = ChatCompletionRequest(
                     model=ext_model or atlas_model,
@@ -896,7 +960,10 @@ class CorePipeline:
                     tools=inp.tools,
                     tool_choice=inp.tool_choice,
                 )
-                log.info(f"[pipeline] tool request → claude-cli/{ext_model or atlas_model} (vertex unavailable)")
+                log.info(
+                    f"[pipeline] tool request → claude-cli/{ext_model or atlas_model}"
+                    " (vertex unavailable)"
+                )
 
                 if inp.stream:
                     result.chunk_iterator = _tool_complete_and_stream(cli, req)
@@ -1024,7 +1091,11 @@ class CorePipeline:
         rd: RoutingDecision | None = getattr(inp, "routing_decision", None)
 
         # Smart router provided a decision — use its non-atlas model directly
-        if rd and rd.provider_model and not (rd.atlas_model and rd.primary_provider == "claude-cli"):
+        if (
+            rd
+            and rd.provider_model
+            and not (rd.atlas_model and rd.primary_provider == "claude-cli")
+        ):
             model_name = rd.provider_model
             provider_name = rd.primary_provider
             # Try fallback chain if primary provider unhealthy
@@ -1037,7 +1108,11 @@ class CorePipeline:
                         log.info(f"[route] Fallback: {rd.primary_model} → {fb_model} ({p.name})")
                         result.routing_reason = f"fallback:{rd.primary_model}->{fb_model}"
                         break
-        elif model.startswith("auto") or model == "local" or model in ("Atlas", "atlas", "alpheric-1"):
+        elif (
+            model.startswith("auto")
+            or model == "local"
+            or model in ("Atlas", "atlas", "alpheric-1")
+        ):
             strategy = inp.strategy
             if model == "auto:fast":
                 strategy = "lowest_latency"
@@ -1091,7 +1166,9 @@ class CorePipeline:
                 from a1.chunking.chunker import chunk_and_reduce, needs_chunking
                 from a1.common.tokens import count_tokens
 
-                ctx_tokens = sum(count_tokens(m.content or "") for m in inp.messages if hasattr(m, "content"))
+                ctx_tokens = sum(
+                    count_tokens(m.content or "") for m in inp.messages if hasattr(m, "content")
+                )
                 provider_models = provider.list_models() if hasattr(provider, "list_models") else []
                 ctx_window = next(
                     (m.context_window for m in provider_models if m.name == model_name),

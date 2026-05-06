@@ -70,11 +70,40 @@ class OllamaProvider(LLMProvider):
 
                     for m in data.get("models", []):
                         model_name = m["name"]
-                        details = m.get("details", {})
+                        # Try to get real context window from /api/show
+                        ctx = self._KNOWN_CTX.get(model_name, 0)
+                        if not ctx:
+                            try:
+                                show_resp = await client.post(
+                                    "/api/show", json={"name": model_name}, timeout=5.0
+                                )
+                                if show_resp.status_code == 200:
+                                    show = show_resp.json()
+                                    # model_info.parameters contains num_ctx if set via Modelfile
+                                    params = show.get("parameters", "")
+                                    for line in str(params).splitlines():
+                                        if "num_ctx" in line:
+                                            try:
+                                                ctx = int(line.split()[-1])
+                                            except ValueError:
+                                                pass
+                                    # Also check model_info -> context_length
+                                    if not ctx:
+                                        ctx = show.get("model_info", {}).get(
+                                            "llama.context_length", 0
+                                        )
+                            except Exception:
+                                pass
+                        # Final fallback: use known map or 32768
+                        if not ctx:
+                            ctx = max(
+                                m.get("details", {}).get("context_length", 0),
+                                self._KNOWN_CTX.get(model_name.split(":")[0] + ":latest", 32768),
+                            )
                         model_info = ModelInfo(
                             name=model_name,
                             provider="ollama",
-                            context_window=details.get("context_length", 4096),
+                            context_window=ctx,
                             cost_per_1k_input=0.0,
                             cost_per_1k_output=0.0,
                             supports_tools=True,
@@ -101,32 +130,52 @@ class OllamaProvider(LLMProvider):
         total = len(self._models)
         healthy = sum(1 for s in self._servers if s.healthy)
         log.info(f"Ollama: {total} models across {healthy}/{len(self._servers)} servers")
-        # Pre-warm models into VRAM so the first real request has no cold-start delay.
-        await self._warm_up_models()
+        # Pre-warm models into VRAM — fire and forget so startup isn't blocked.
+        import asyncio
+
+        asyncio.ensure_future(self._warm_up_models())
 
     async def _warm_up_models(self):
-        """Send a minimal generation to each server to load models into VRAM."""
+        """Send a minimal generation to each server to load models into VRAM.
+
+        Uses a dedicated short-lived client per server so the persistent client
+        pool (shared by real requests) is never blocked during warm-up.
+        """
         import asyncio
-        tasks = []
-        for server in self._servers:
-            if not server.healthy or not server.models:
-                continue
-            client, _ = self._get_client_for_model(server.models[0].name)
-            # num_predict=1 generates one token — just enough to load weights into VRAM.
+
+        async def _warm_one(url: str, model: str):
             payload = {
-                "model": server.models[0].name,
+                "model": model,
                 "prompt": "hi",
                 "stream": False,
                 "options": {"num_predict": 1, "keep_alive": -1},
             }
-            tasks.append(client.post("/api/generate", json=payload))
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, r in enumerate(results):
-                if isinstance(r, Exception):
-                    log.warning(f"Warm-up failed for server {i}: {r}")
-                else:
-                    log.info(f"Warm-up done for server {i}")
+            # Separate client — does NOT touch self._clients, so real requests
+            # keep their full connection pool while the GPU loads weights.
+            async with httpx.AsyncClient(
+                base_url=url,
+                timeout=httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0),
+            ) as warm_client:
+                resp = await warm_client.post("/api/generate", json=payload)
+                resp.raise_for_status()
+
+        tasks = []
+        for server in self._servers:
+            if not server.healthy or not server.models:
+                continue
+            tasks.append((server.url, server.models[0].name))
+
+        if not tasks:
+            return
+
+        async def _run(url, model):
+            try:
+                await _warm_one(url, model)
+                log.info(f"Warm-up done: {url} / {model}")
+            except Exception as e:
+                log.warning(f"Warm-up failed: {url} / {model} — {e}")
+
+        await asyncio.gather(*[_run(u, m) for u, m in tasks], return_exceptions=True)
 
     def _get_client_for_model(self, model: str) -> tuple[httpx.AsyncClient, str]:
         """Return the persistent HTTP client for the server hosting this model."""
@@ -158,6 +207,39 @@ class OllamaProvider(LLMProvider):
         name = model.lower()
         return any(k in name for k in ("deepseek-r1", "deepseek_r1", "qwq", "r1"))
 
+    # Known context windows for popular models — used when /api/show doesn't return one.
+    # These are the models' *trained* max context. Set num_ctx to the full value.
+    _KNOWN_CTX: dict[str, int] = {
+        "qwen2.5-coder:7b": 32768,
+        "qwen2.5-coder:14b": 32768,
+        "qwen2.5-coder:32b": 32768,
+        "deepseek-coder:6.7b": 16384,
+        "deepseek-coder-v2:16b": 163840,
+        "deepseek-r1:8b": 131072,
+        "llama3.2:latest": 131072,
+        "llama3.2:3b": 131072,
+        "gemma3:12b": 131072,
+        "gemma3:4b": 131072,
+        "mistral:7b": 32768,
+        "codellama:13b": 16384,
+        "nomic-embed-text:latest": 8192,
+    }
+
+    def _ctx_for_model(self, model: str) -> int:
+        """Return the context window to request for this model."""
+        # Exact match first
+        if model in self._KNOWN_CTX:
+            return self._KNOWN_CTX[model]
+        # Prefix match (e.g. "qwen2.5-coder:7b-instruct-q4" → "qwen2.5-coder:7b")
+        for k, v in self._KNOWN_CTX.items():
+            if model.startswith(k.split(":")[0]):
+                return v
+        # Fall back to discovered context_window or 32768 minimum
+        for m in self._models:
+            if m.name == model:
+                return max(m.context_window, 32768)
+        return 32768
+
     def _build_options(self, request: ChatCompletionRequest, model: str = "") -> dict:
         """Build Ollama options dict from the request."""
         # Thinking models (deepseek-r1, qwq) spend hundreds of tokens on internal
@@ -170,20 +252,44 @@ class OllamaProvider(LLMProvider):
             "keep_alive": -1,
             # Limit output to what was requested so Ollama doesn't over-generate.
             "num_predict": max(request.max_tokens or 2048, min_tokens),
+            # Explicitly set context window — Ollama defaults to 2048 without this.
+            "num_ctx": self._ctx_for_model(model),
         }
         if request.temperature is not None:
             opts["temperature"] = request.temperature
         return opts
 
     async def complete(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
+        import json as _json
+        import uuid as _uuid
+
         model = request.model
         if model == "local" and self._models:
             model = self._models[0].name
 
         client, _ = self._get_client_for_model(model)
         messages = [{"role": m.role, "content": m.content or ""} for m in request.messages]
-        payload = {"model": model, "messages": messages, "stream": False,
-                   "options": self._build_options(request, model)}
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "options": self._build_options(request, model),
+        }
+
+        # Pass tool definitions when provided — Ollama /api/chat supports function calling
+        # for models like qwen2.5-coder, llama3.1, etc.
+        if request.tools:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.function.name,
+                        "description": t.function.description or "",
+                        "parameters": t.function.parameters or {"type": "object", "properties": {}},
+                    },
+                }
+                for t in request.tools
+            ]
 
         resp = await client.post("/api/chat", json=payload)
         resp.raise_for_status()
@@ -194,9 +300,39 @@ class OllamaProvider(LLMProvider):
         # field and may leave `content` empty.  Fall back so callers always get text.
         content = msg.get("content") or msg.get("thinking") or ""
 
+        # Convert Ollama tool_calls to OpenAI format
+        # Ollama: [{"function": {"name": "...", "arguments": {...}}}]
+        # OpenAI: [{"id": "...", "type": "function", "function": {...}}]
+        tool_calls_out: list[dict] | None = None
+        raw_tool_calls = msg.get("tool_calls")
+        if raw_tool_calls:
+            tool_calls_out = []
+            for tc in raw_tool_calls:
+                fn = tc.get("function", {})
+                args = fn.get("arguments", {})
+                # Ollama returns arguments as a dict; OpenAI expects a JSON string
+                args_str = _json.dumps(args) if isinstance(args, dict) else (args or "{}")
+                tool_calls_out.append(
+                    {
+                        "id": f"call_{_uuid.uuid4().hex[:8]}",
+                        "type": "function",
+                        "function": {
+                            "name": fn.get("name", "unknown"),
+                            "arguments": args_str,
+                        },
+                    }
+                )
+
+        finish_reason = "tool_calls" if tool_calls_out else "stop"
+
         return ChatCompletionResponse(
             model=model,
-            choices=[Choice(message=ChoiceMessage(content=content))],
+            choices=[
+                Choice(
+                    message=ChoiceMessage(content=content, tool_calls=tool_calls_out),
+                    finish_reason=finish_reason,
+                )
+            ],
             usage=Usage(
                 prompt_tokens=data.get("prompt_eval_count", 0),
                 completion_tokens=data.get("eval_count", 0),
@@ -212,8 +348,12 @@ class OllamaProvider(LLMProvider):
 
         client, _ = self._get_client_for_model(model)
         messages = [{"role": m.role, "content": m.content or ""} for m in request.messages]
-        payload = {"model": model, "messages": messages, "stream": True,
-                   "options": self._build_options(request, model)}
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "options": self._build_options(request, model),
+        }
         chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
         yield ChatCompletionChunk(

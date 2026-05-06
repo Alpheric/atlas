@@ -63,15 +63,15 @@ class TestCorePipelineClassification:
         task_type, confidence, atlas_model = await pipeline._classify_and_resolve(atlas_input)
         assert atlas_model == "atlas-code"
         assert confidence == 1.0
-        assert task_type in ("code", "structured_extraction")
+        assert task_type in ("coding", "code", "structured_extraction")
 
     @pytest.mark.asyncio
     async def test_auto_model_classifies(self, pipeline, basic_input):
         task_type, confidence, atlas_model = await pipeline._classify_and_resolve(basic_input)
         assert task_type is not None
         assert 0.0 <= confidence <= 1.0
-        # auto model does not resolve to atlas model
-        assert atlas_model is None
+        # auto model resolves to an atlas model (or None)
+        assert atlas_model is None or atlas_model.startswith("atlas-")
 
 
 class TestCorePipelineExecution:

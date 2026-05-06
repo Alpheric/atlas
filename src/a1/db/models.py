@@ -129,8 +129,10 @@ class RoutingDecision(Base):
     self_healed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     heal_score_before: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Vertex AI / Gemini web search grounding
-    web_search_grounded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    grounding_metadata: Mapped[str | None] = mapped_column(Text, nullable=True)   # JSON
+    web_search_grounded: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    grounding_metadata: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
 
     message: Mapped[Message] = relationship(back_populates="routing_decision")
@@ -199,11 +201,15 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True)
     role: Mapped[str] = mapped_column(String(32), default="developer")  # admin | developer | viewer
-    rate_limit: Mapped[int] = mapped_column(Integer, default=60)       # requests/min applied to all their keys
+    rate_limit: Mapped[int] = mapped_column(
+        Integer, default=60
+    )  # requests/min applied to all their keys
     monthly_token_limit: Mapped[int] = mapped_column(Integer, default=0)  # 0 = unlimited
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
 
-    api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    api_keys: Mapped[list["ApiKey"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class ApiKey(Base):
@@ -680,9 +686,7 @@ class AtlasApiKey(Base):
 
     __tablename__ = "atlas_api_keys"
     __table_args__ = (
-        CheckConstraint(
-            "status IN ('active','disabled','revoked')", name="chk_atlas_key_status"
-        ),
+        CheckConstraint("status IN ('active','disabled','revoked')", name="chk_atlas_key_status"),
         Index("ix_atlas_api_keys_tenant_id", "tenant_id"),
         Index("ix_atlas_api_keys_key_hash", "key_hash"),
     )
@@ -694,7 +698,7 @@ class AtlasApiKey(Base):
     tenant_owner_email: Mapped[str] = mapped_column(String(256), nullable=False)
     source: Mapped[str] = mapped_column(String(64), default="onedesk")  # which platform provisioned
     # Key material — raw key NEVER stored
-    key_prefix: Mapped[str] = mapped_column(String(20), nullable=False)   # e.g. "sk-atlas-a1b2c3"
+    key_prefix: Mapped[str] = mapped_column(String(20), nullable=False)  # e.g. "sk-atlas-a1b2c3"
     key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)  # SHA-256
     # Lifecycle
     status: Mapped[str] = mapped_column(String(16), default="active")  # active | disabled | revoked
@@ -728,11 +732,13 @@ class ProvisioningAuditLog(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     alpheric_key_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # UUID as str
-    action: Mapped[str] = mapped_column(String(64), nullable=False)   # provisioned | rotated | disabled | status_checked | invalid_token | disabled_key_used | chat_completion
-    status: Mapped[str] = mapped_column(String(16), nullable=False)   # success | failure
+    action: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )  # provisioned | rotated | disabled | status_checked | invalid_token | chat_completion
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # success | failure
     safe_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)   # SHA-256 of client IP
+    ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)  # SHA-256 of client IP
     user_agent_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
 
@@ -1074,7 +1080,9 @@ class WebSearchRun(Base):
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), default=0.0)
     blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     block_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    search_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)  # "high_intent", etc.
+    search_reason: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )  # "high_intent", etc.
     atlas_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
 
@@ -1102,7 +1110,7 @@ class WebSearchResult(Base):
     url: Mapped[str] = mapped_column(Text, nullable=False)
     snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_date: Mapped[str | None] = mapped_column(String(32), nullable=True)  # ISO date
-    source: Mapped[str | None] = mapped_column(String(256), nullable=True)   # domain
+    source: Mapped[str | None] = mapped_column(String(256), nullable=True)  # domain
     rank: Mapped[int] = mapped_column(Integer, nullable=False)
     was_extracted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
@@ -1181,7 +1189,9 @@ class UploadedFile(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)  # "file-<hex>"
     filename: Mapped[str] = mapped_column(Text, nullable=False)
-    purpose: Mapped[str] = mapped_column(String(64), nullable=False)  # assistants|batch|fine-tune|vision
+    purpose: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )  # assistants|batch|fine-tune|vision
     bytes_: Mapped[int] = mapped_column("bytes", Integer, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)  # absolute path on disk
@@ -1205,9 +1215,13 @@ class VectorStore(Base):
     workspace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist, onupdate=_now_ist)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now_ist, onupdate=_now_ist
+    )
 
-    chunks: Mapped[list["VectorChunk"]] = relationship(back_populates="store", cascade="all, delete-orphan")
+    chunks: Mapped[list["VectorChunk"]] = relationship(
+        back_populates="store", cascade="all, delete-orphan"
+    )
 
 
 class VectorChunk(Base):
@@ -1216,12 +1230,18 @@ class VectorChunk(Base):
     __tablename__ = "vector_chunks"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    store_id: Mapped[str] = mapped_column(String(64), ForeignKey("vector_stores.id", ondelete="CASCADE"), nullable=False)
-    file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)   # links to uploaded_files
+    store_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("vector_stores.id", ondelete="CASCADE"), nullable=False
+    )
+    file_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )  # links to uploaded_files
     filename: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[list] = mapped_column(Vector(None), nullable=False)  # dim varies: 768=nomic, 3072=gemini
+    embedding: Mapped[list] = mapped_column(
+        Vector(None), nullable=False
+    )  # dim varies: 768=nomic, 3072=gemini
     model: Mapped[str] = mapped_column(String(128), nullable=False)  # embedding model used
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
 
@@ -1238,11 +1258,13 @@ class Batch(Base):
 
     __tablename__ = "batches"
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)       # "batch-<hex>"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # "batch-<hex>"
     input_file_id: Mapped[str] = mapped_column(String(64), nullable=False)
     output_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    endpoint: Mapped[str] = mapped_column(String(128), nullable=False, default="/v1/chat/completions")
+    endpoint: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="/v1/chat/completions"
+    )
     completion_window: Mapped[str] = mapped_column(String(16), nullable=False, default="24h")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="validating")
     # validating | in_progress | finalizing | completed | failed | cancelled | expired

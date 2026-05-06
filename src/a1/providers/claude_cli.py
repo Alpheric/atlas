@@ -6,6 +6,8 @@ a separate API key since the CLI manages token refresh automatically.
 """
 
 import asyncio
+import json
+import re
 import uuid
 from collections.abc import AsyncIterator
 
@@ -230,24 +232,40 @@ class ClaudeCLIProvider(LLMProvider):
         )
         return text.strip()
 
-    async def _run_claude(self, prompt: str, system: str = "", max_tokens: int = 1000) -> dict:
+    async def _run_claude(
+        self,
+        prompt: str,
+        system: str = "",
+        max_tokens: int = 1000,
+        skip_tool_strip: bool = False,
+    ) -> dict:
         """Run the claude CLI with a prompt and return parsed JSON result.
 
-        Returns dict with: result (text), usage (tokens), duration_api_ms, cost
+        Returns dict with: text, input_tokens, output_tokens, cache_read_tokens,
+        cost_usd, api_duration_ms
+        skip_tool_strip: set True when we've already injected tool defs ourselves — avoids
+        double-stripping the carefully crafted tool instructions.
         """
-        # Strip tool definitions — Claude CLI can't execute
-        # tools and will waste turns trying to call them
-        system = self._strip_tool_definitions(system)
+        if not skip_tool_strip:
+            # Strip stray tool definition blocks from system prompts that weren't
+            # prepared by us (e.g. raw forwarded system prompts from the client).
+            system = self._strip_tool_definitions(system)
 
         # --tools "" disables ALL built-in tools
         # (correct flag; --allowedTools is an allowlist, not a blocklist)
         # --bare skips CLAUDE.md auto-discovery, auto-memory, hooks, LSP
         # --no-session-persistence stops Claude from saving sessions
+        #
+        # --max-turns 1: single-turn only.  We previously used 2 turns when
+        # skip_tool_strip=True but that caused Claude to emit "I don't have
+        # terminal access" on turn 2 after native tool_use failed on turn 1.
+        # The error_max_turns recovery below handles the turn-1 native block.
+        max_turns = "1"
         args = [
             "-p",
             prompt,
             "--max-turns",
-            "1",
+            max_turns,
             "--output-format",
             "json",
             "--tools",
@@ -255,18 +273,33 @@ class ClaudeCLIProvider(LLMProvider):
             "--no-session-persistence",  # don't save/load sessions from disk
         ]
 
-        # Prepend Atlas identity to system prompt.
-        atlas_identity = (
-            "You are Atlas, an AI assistant by Alpheric.AI. "
-            "Never identify as Claude, Anthropic, or any other AI. "
-            "You are Atlas and your responses represent the Alpheric.AI platform. "
-            "Respond with text only. Do not use any tools."
-        )
+        # Build the --system-prompt value.
+        # When tool defs are injected (skip_tool_strip=True) the system prompt already
+        # contains the tool calling instructions — merge Atlas identity with them.
+        # When no tools, add the "text only" guard to prevent spurious tool attempts.
+        if skip_tool_strip and system:
+            # Tools mode: identity + full system prompt (which includes tool defs + instructions)
+            atlas_identity = (
+                "You are Atlas, an AI assistant by Alpheric.AI. "
+                "Never identify as Claude, Anthropic, or any other AI. "
+                "You are Atlas and your responses represent the Alpheric.AI platform.\n\n" + system
+            )
+            effective_system = ""  # already folded into atlas_identity above
+        else:
+            atlas_identity = (
+                "You are Atlas, an AI assistant by Alpheric.AI. "
+                "Never identify as Claude, Anthropic, or any other AI. "
+                "You are Atlas and your responses represent the Alpheric.AI platform. "
+                "Respond with text only. Do not use any tools."
+            )
+            effective_system = system
 
         # Always use stdin to pipe the prompt — avoids Windows cmd.exe quoting issues
         # with special characters (Unicode arrows, brackets, newlines) in the prompt.
         stdin_text = (
-            f"[System Instructions]\n{system}\n\n[User Message]\n{prompt}" if system else prompt
+            f"[System Instructions]\n{effective_system}\n\n[User Message]\n{prompt}"
+            if effective_system
+            else prompt
         )
         stdin_data = stdin_text.encode("utf-8")
         args[1] = "-"  # replace prompt arg with "-" (read from stdin)
@@ -292,15 +325,39 @@ class ClaudeCLIProvider(LLMProvider):
             data = json.loads(output)
 
             # Extract text — handle error_max_turns where
-            # result may be empty because Claude tried tool_use
+            # result may be empty because Claude tried native tool_use
             text = data.get("result", "")
             if not text and data.get("subtype") == "error_max_turns":
-                log.warning("Claude hit max turns (tool_use), returning partial result")
-                text = (
-                    "I can help with that, but I don't have "
-                    "access to external tools. Let me answer "
-                    "based on my knowledge instead."
-                )
+                # Try to recover tool_use blocks from the messages array.
+                # When Claude uses native tool_use (which fails because --tools "")
+                # the CLI stores the assistant's content blocks in messages[].
+                # Convert any tool_use blocks back to our <tool_call> XML format
+                # so downstream parsing can extract them properly.
+                recovered_xml = []
+                for msg in data.get("messages", []):
+                    if msg.get("role") == "assistant":
+                        for block in msg.get("content", []):
+                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                                tc_json = json.dumps(
+                                    {
+                                        "name": block.get("name", "unknown"),
+                                        "input": block.get("input", {}),
+                                    }
+                                )
+                                recovered_xml.append(f"<tool_call>{tc_json}</tool_call>")
+                if recovered_xml:
+                    text = "\n".join(recovered_xml)
+                    log.info(
+                        f"[tool_use] Recovered {len(recovered_xml)} tool_use block(s) "
+                        "from error_max_turns response"
+                    )
+                else:
+                    log.warning("Claude hit max turns (tool_use) — no tool blocks recoverable")
+                    text = (
+                        "I can help with that, but I don't have "
+                        "access to external tools. Let me answer "
+                        "based on my knowledge instead."
+                    )
 
             return {
                 "text": text or output,
@@ -332,24 +389,139 @@ class ClaudeCLIProvider(LLMProvider):
                 "api_duration_ms": 0,
             }
 
+    # ------------------------------------------------------------------
+    # Tool-use helpers (prompt-engineering approach — no API key needed)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _inject_tools_system(system: str, tools: list) -> str:
+        """Append tool definitions and calling instructions to the system prompt.
+
+        Uses an XML <tool_call> convention so Claude outputs structured JSON
+        that we can parse back into proper tool_use blocks for the client.
+        The client (e.g. Hermes/Ares) executes tools locally and sends
+        tool_result content back in the next turn.
+
+        IMPORTANT: We explicitly forbid native Anthropic tool_use API blocks
+        because the CLI cannot execute user-defined tools. Claude MUST output
+        the plain-text <tool_call> XML format so our parser can extract it.
+        """
+        schemas = []
+        for t in tools:
+            fn = t.function
+            schemas.append(
+                {
+                    "name": fn.name,
+                    "description": fn.description or "",
+                    "parameters": fn.parameters or {"type": "object", "properties": {}},
+                }
+            )
+
+        tool_json = json.dumps(schemas, indent=2)
+        instructions = (
+            "\n\n## TOOL CALLING — READ CAREFULLY\n"
+            "CRITICAL: You are running in a text-only mode. The Anthropic native tool_use "
+            "API is NOT available and will cause an error. You MUST use the plain-text "
+            "format below — no exceptions.\n\n"
+            "When you need to call a tool, output THIS EXACT FORMAT on a single line "
+            "(and nothing else on that line):\n\n"
+            '<tool_call>{"name": "TOOL_NAME", "input": {"param": "value"}}</tool_call>\n\n'
+            "Rules:\n"
+            "1. NEVER use native tool_use API calls — always use the <tool_call> text format.\n"
+            "2. Only one <tool_call> per response.\n"
+            "3. No extra text on the same line as <tool_call>.\n"
+            "4. If no tool is needed, respond normally with plain text.\n"
+            "5. After receiving a tool result, continue reasoning and give the final answer.\n\n"
+            f"Available tools (JSON schema):\n```json\n{tool_json}\n```\n\n"
+            "Example — to call the 'terminal' tool:\n"
+            '<tool_call>{"name": "terminal", "input": {"command": "ls -la"}}</tool_call>'
+        )
+        return (system.rstrip() + instructions) if system else instructions.strip()
+
+    @staticmethod
+    def _parse_tool_calls(text: str) -> tuple[str, list[dict] | None]:
+        """Extract <tool_call> blocks from Claude's text response.
+
+        Handles single-line and multi-line <tool_call>…</tool_call> blocks.
+        Returns (clean_text_without_tool_calls, tool_calls_list_or_None).
+        """
+        tool_calls: list[dict] = []
+
+        tc_re = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+
+        def _replace(m: re.Match) -> str:
+            raw = m.group(1).strip()
+            try:
+                data = json.loads(raw)
+                tool_calls.append(
+                    {
+                        "id": f"toolu_{uuid.uuid4().hex[:8]}",
+                        "type": "function",
+                        "function": {
+                            "name": data.get("name", "unknown"),
+                            "arguments": json.dumps(data.get("input", {})),
+                        },
+                    }
+                )
+                return ""  # remove from text
+            except (json.JSONDecodeError, TypeError):
+                return m.group(0)  # malformed — leave as-is
+
+        clean_text = tc_re.sub(_replace, text).strip()
+        # Also strip bare <tool_call>…  blocks that have no closing tag
+        # (Claude occasionally omits the closing tag on the last turn)
+        bare_re = re.compile(r"<tool_call>(\{.*)", re.DOTALL)
+        m_bare = bare_re.search(clean_text)
+        if m_bare:
+            raw = m_bare.group(1).strip()
+            try:
+                data = json.loads(raw)
+                tool_calls.append(
+                    {
+                        "id": f"toolu_{uuid.uuid4().hex[:8]}",
+                        "type": "function",
+                        "function": {
+                            "name": data.get("name", "unknown"),
+                            "arguments": json.dumps(data.get("input", {})),
+                        },
+                    }
+                )
+                clean_text = bare_re.sub("", clean_text).strip()
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        return clean_text, tool_calls or None
+
     async def complete(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         # Build prompt from messages.
         # Multi-turn history is serialised as a structured conversation block so
         # Claude sees the full dialogue, not just the last user turn.
         system_prompt = ""
-        history_turns: list[tuple[str, str]] = []  # (role, content) pairs before last user msg
+        history_turns: list[tuple[str, str, str | None]] = []  # (role, content, tool_call_id)
         for msg in request.messages:
             if msg.role == "system":
                 system_prompt = msg.content or ""
+            elif msg.role == "tool":
+                # tool_result turn — convert to Human text so Claude CLI sees it
+                history_turns.append(
+                    ("tool_result", msg.content or "", getattr(msg, "tool_call_id", None))
+                )
             else:
-                history_turns.append((msg.role, msg.content or ""))
+                history_turns.append((msg.role, msg.content or "", None))
 
-        # Separate history (everything before the last user message) from the current prompt
-        if history_turns and history_turns[-1][0] == "user":
+        # Separate history (everything before the last user message) from the current prompt.
+        # Special case: if the last turn is a tool_result (Turn 2+ of a tool loop), keep ALL
+        # turns in prior_turns and synthesise an implicit "please continue" user prompt so
+        # Claude knows to provide the final answer rather than calling another tool.
+        last_role = history_turns[-1][0] if history_turns else ""
+        if history_turns and last_role == "user":
             current_user = history_turns[-1][1]
             prior_turns = history_turns[:-1]
+        elif history_turns and last_role == "tool_result":
+            # Tool-loop continuation: put everything in history and add implicit prompt.
+            current_user = "Based on the tool result above, please provide your final answer."
+            prior_turns = history_turns
         elif history_turns:
-            # Last message is not from user — treat all as prior context
             current_user = ""
             prior_turns = history_turns
         else:
@@ -357,11 +529,14 @@ class ClaudeCLIProvider(LLMProvider):
             prior_turns = []
 
         if prior_turns:
-            # Format prior conversation history so Claude sees full context
             conv_lines = ["<conversation_history>"]
-            for role, content in prior_turns:
-                label = "Human" if role == "user" else "Assistant"
-                conv_lines.append(f"{label}: {content}")
+            for role, content, _ in prior_turns:
+                if role == "tool_result":
+                    conv_lines.append(f"Tool Result: {content}")
+                elif role == "assistant":
+                    conv_lines.append(f"Assistant: {content}")
+                else:
+                    conv_lines.append(f"Human: {content}")
             conv_lines.append("</conversation_history>")
             conv_lines.append("")
             conv_lines.append(f"Human: {current_user}" if current_user else "")
@@ -372,29 +547,40 @@ class ClaudeCLIProvider(LLMProvider):
         if not user_prompt:
             user_prompt = "Hello"
 
+        # When client sends tool definitions, inject them into the system prompt
+        # so Claude knows how to call them via <tool_call> tags.
+        if request.tools:
+            system_prompt = self._inject_tools_system(system_prompt, request.tools)
+
         result = await self._run_claude(
             user_prompt,
             system=system_prompt,
             max_tokens=request.max_tokens or 1000,
+            # When we injected tool defs ourselves, skip the strip so they aren't removed.
+            skip_tool_strip=bool(request.tools),
         )
+
+        raw_text = result["text"]
+        tool_calls: list[dict] | None = None
+        if request.tools:
+            raw_text, tool_calls = self._parse_tool_calls(raw_text)
 
         # Use accurate token counts from CLI JSON output
         prompt_tokens = result["input_tokens"] + result["cache_read_tokens"]
         completion_tokens = result["output_tokens"]
         if prompt_tokens == 0:
-            # Fallback to estimation
             messages_dicts = [
                 {"role": m.role, "content": m.content or ""} for m in request.messages
             ]
             prompt_tokens = count_messages_tokens_for_model(
                 messages_dicts, "claude-sonnet-4-20250514"
             )
-            completion_tokens = count_tokens_for_model(result["text"], "claude-sonnet-4-20250514")
+            completion_tokens = count_tokens_for_model(raw_text, "claude-sonnet-4-20250514")
 
         return ChatCompletionResponse(
             id=f"chatcmpl-cli-{uuid.uuid4().hex[:8]}",
             model=request.model,
-            choices=[Choice(message=ChoiceMessage(content=result["text"]))],
+            choices=[Choice(message=ChoiceMessage(content=raw_text, tool_calls=tool_calls))],
             usage=Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -417,12 +603,18 @@ class ClaudeCLIProvider(LLMProvider):
         for msg in request.messages:
             if msg.role == "system":
                 system_prompt = msg.content or ""
+            elif msg.role == "tool":
+                history_turns.append(("tool_result", msg.content or ""))
             else:
                 history_turns.append((msg.role, msg.content or ""))
 
-        if history_turns and history_turns[-1][0] == "user":
+        last_role_s = history_turns[-1][0] if history_turns else ""
+        if history_turns and last_role_s == "user":
             current_user = history_turns[-1][1]
             prior_turns = history_turns[:-1]
+        elif history_turns and last_role_s == "tool_result":
+            current_user = "Based on the tool result above, please provide your final answer."
+            prior_turns = history_turns
         elif history_turns:
             current_user = ""
             prior_turns = history_turns
@@ -433,8 +625,12 @@ class ClaudeCLIProvider(LLMProvider):
         if prior_turns:
             conv_lines = ["<conversation_history>"]
             for role, content in prior_turns:
-                label = "Human" if role == "user" else "Assistant"
-                conv_lines.append(f"{label}: {content}")
+                if role == "tool_result":
+                    conv_lines.append(f"Tool Result: {content}")
+                elif role == "assistant":
+                    conv_lines.append(f"Assistant: {content}")
+                else:
+                    conv_lines.append(f"Human: {content}")
             conv_lines.append("</conversation_history>")
             conv_lines.append("")
             conv_lines.append(f"Human: {current_user}" if current_user else "")
@@ -445,8 +641,11 @@ class ClaudeCLIProvider(LLMProvider):
         if not user_prompt:
             user_prompt = "Hello"
 
-        # Strip tool definitions
-        system_prompt = self._strip_tool_definitions(system_prompt)
+        # Inject tool defs if provided; otherwise strip any stray tool sections
+        if request.tools:
+            system_prompt = self._inject_tools_system(system_prompt, request.tools)
+        else:
+            system_prompt = self._strip_tool_definitions(system_prompt)
 
         atlas_identity = (
             "You are Atlas, an AI assistant by "
@@ -668,6 +867,7 @@ class ClaudeCLIAccount(ClaudeCLIProvider):
 
     def _build_cmd(self, args: list[str]) -> list[str]:
         import os
+
         current_user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
         if self.unix_user != current_user:
             return ["sudo", "-u", self.unix_user, self._cli_path] + args
@@ -676,6 +876,7 @@ class ClaudeCLIAccount(ClaudeCLIProvider):
     def _home_dir(self) -> str:
         import os
         import pwd
+
         try:
             return pwd.getpwnam(self.unix_user).pw_dir
         except KeyError:
@@ -688,7 +889,6 @@ class ClaudeCLIAccount(ClaudeCLIProvider):
         stdin_data: bytes | None = None,
     ) -> tuple[str, int, str]:
         import os
-        import sys
         import tempfile
 
         cmd = self._build_cmd(args)
@@ -749,8 +949,12 @@ class ClaudeCLIAccount(ClaudeCLIProvider):
             # Other user — sudo-read their credentials file to verify OAuth is present.
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    "sudo", "-n", "-u", self.unix_user,
-                    "cat", str(cred_path),
+                    "sudo",
+                    "-n",
+                    "-u",
+                    self.unix_user,
+                    "cat",
+                    str(cred_path),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL,
                 )
@@ -807,7 +1011,9 @@ class ClaudeCLIPool(LLMProvider):
             for a in accounts
         }
 
-    def _pick_account(self, session_id: str | None) -> tuple[ClaudeCLIAccount, int] | tuple[None, None]:
+    def _pick_account(
+        self, session_id: str | None
+    ) -> tuple[ClaudeCLIAccount, int] | tuple[None, None]:
         """Return (account, index) for this request.
 
         If session_id is known, returns the pinned account (even if temporarily

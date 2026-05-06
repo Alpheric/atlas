@@ -22,45 +22,57 @@ the suite reliable and repeatable:
      the test's own queries.  We replace them with instant no-ops.
 """
 
-import asyncio
 import pytest
 import pytest_asyncio
-
 
 # ── Tenant IDs used by the test suite ────────────────────────────────────────
 
 _TEST_TENANTS = [
-    "tenant_test_01", "tenant_test_02", "tenant_test_03", "tenant_test_04",
-    "tenant_test_05", "tenant_test_06", "tenant_test_07", "tenant_test_08",
-    "tenant_test_09", "tenant_test_10", "tenant_test_11", "tenant_test_12",
-    "tenant_test_13", "test_tenant_001",
+    "tenant_test_01",
+    "tenant_test_02",
+    "tenant_test_03",
+    "tenant_test_04",
+    "tenant_test_05",
+    "tenant_test_06",
+    "tenant_test_07",
+    "tenant_test_08",
+    "tenant_test_09",
+    "tenant_test_10",
+    "tenant_test_11",
+    "tenant_test_12",
+    "tenant_test_13",
+    "test_tenant_001",
 ]
 
 
 # ── 1. Wipe test tenant data before the whole session ────────────────────────
 
+
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def clean_test_data_before_session():
     """Remove any leftover rows from previous test runs before the suite starts."""
-    from a1.db.engine import async_session
-    from a1.db.models import AtlasApiKey, ProvisioningAuditLog
-    from sqlalchemy import delete
+    try:
+        from sqlalchemy import delete
 
-    async with async_session() as db:
-        async with db.begin():
-            await db.execute(
-                delete(ProvisioningAuditLog).where(
-                    ProvisioningAuditLog.tenant_id.in_(_TEST_TENANTS)
+        from a1.db.engine import async_session
+        from a1.db.models import AtlasApiKey, ProvisioningAuditLog
+
+        async with async_session() as db:
+            async with db.begin():
+                await db.execute(
+                    delete(ProvisioningAuditLog).where(
+                        ProvisioningAuditLog.tenant_id.in_(_TEST_TENANTS)
+                    )
                 )
-            )
-            await db.execute(
-                delete(AtlasApiKey).where(
-                    AtlasApiKey.tenant_id.in_(_TEST_TENANTS)
+                await db.execute(
+                    delete(AtlasApiKey).where(AtlasApiKey.tenant_id.in_(_TEST_TENANTS))
                 )
-            )
+    except Exception:
+        pass  # Skip cleanup if DB not available (e.g. sqlite, vertex-only tests)
 
 
 # ── 2. Dispose connection pool + reset rate limiter between tests ─────────────
+
 
 @pytest_asyncio.fixture(autouse=True)
 async def isolate_test():
@@ -70,6 +82,7 @@ async def isolate_test():
     # Clear rate limiter (must happen before the engine disposal)
     try:
         import a1.provisioning.router as _prov
+
         _prov._prov_buckets.clear()
     except ImportError:
         pass
@@ -78,12 +91,14 @@ async def isolate_test():
     # state by cancelled lifespan tasks, so the next test starts clean.
     try:
         from a1.db.engine import engine
+
         await engine.dispose()
     except Exception:
         pass
 
 
 # ── 3. Suppress DB-touching background coroutines spawned by create_app() ────
+
 
 @pytest.fixture(autouse=True)
 def suppress_lifespan_background_tasks(monkeypatch):
@@ -94,12 +109,14 @@ def suppress_lifespan_background_tasks(monkeypatch):
 
     try:
         import a1.healing.conversation_monitor as _mon
+
         monkeypatch.setattr(_mon, "run_health_monitor", _noop)
     except ImportError:
         pass
 
     try:
         import a1.providers.registry as _reg
+
         monkeypatch.setattr(_reg.provider_registry, "refresh_health", _noop)
     except (ImportError, AttributeError):
         pass
@@ -107,18 +124,21 @@ def suppress_lifespan_background_tasks(monkeypatch):
     # Suppress key_pool and agent_registry DB calls during lifespan startup
     try:
         import a1.providers.key_pool as _kp
+
         monkeypatch.setattr(_kp.key_pool, "load_accounts", _noop)
     except (ImportError, AttributeError):
         pass
 
     try:
         import a1.agents.registry as _ar
+
         monkeypatch.setattr(_ar.agent_registry, "initialize", _noop)
     except (ImportError, AttributeError):
         pass
 
 
 # ── Legacy fixtures used by other test files ──────────────────────────────────
+
 
 @pytest.fixture
 def sample_messages():
