@@ -42,6 +42,7 @@ async def list_conversations(
     db: AsyncSession = Depends(get_db),
 ):
     from sqlalchemy import select
+
     from a1.db.models import ConversationHealth
 
     repo = ConversationRepo(db)
@@ -161,9 +162,7 @@ async def list_conversation_health(
     from a1.db.models import ConversationHealth
 
     result = await db.execute(
-        select(ConversationHealth)
-        .order_by(ConversationHealth.health_score.asc())
-        .limit(limit)
+        select(ConversationHealth).order_by(ConversationHealth.health_score.asc()).limit(limit)
     )
     rows = result.scalars().all()
     return {
@@ -185,6 +184,7 @@ async def list_conversation_health(
 @router.get("/conversations/{conv_id}")
 async def get_conversation(conv_id: str, db: AsyncSession = Depends(get_db)):
     from sqlalchemy import select
+
     from a1.db.models import ConversationHealth
 
     repo = ConversationRepo(db)
@@ -208,9 +208,7 @@ async def get_conversation(conv_id: str, db: AsyncSession = Depends(get_db)):
 
     # Load conversation health record
     health_row = await db.execute(
-        select(ConversationHealth).where(
-            ConversationHealth.conversation_id == conv.id
-        )
+        select(ConversationHealth).where(ConversationHealth.conversation_id == conv.id)
     )
     health = health_row.scalar_one_or_none()
 
@@ -237,7 +235,9 @@ async def get_conversation(conv_id: str, db: AsyncSession = Depends(get_db)):
             "avg_quality": health.avg_quality,
             "turn_count": health.turn_count,
             "checked_at": health.checked_at.isoformat() if health.checked_at else None,
-        } if health else None,
+        }
+        if health
+        else None,
         "messages": [
             {
                 "id": str(m.id),
@@ -302,9 +302,7 @@ async def add_feedback(
     if signal_type == "thumbs" and value < 0.5 and settings.feedback_regen_enabled:
         from a1.healing.feedback_handler import handle_thumbs_down
 
-        asyncio.create_task(
-            handle_thumbs_down(conv_id, message_id)
-        )
+        asyncio.create_task(handle_thumbs_down(conv_id, message_id))
 
     return {"id": str(signal.id), "status": "recorded"}
 
@@ -325,7 +323,10 @@ async def regenerate_message(
 
     if not settings.feedback_regen_enabled:
         from fastapi import HTTPException
-        raise HTTPException(503, "Feedback regeneration is disabled (A1_FEEDBACK_REGEN_ENABLED=false)")
+
+        raise HTTPException(
+            503, "Feedback regeneration is disabled (A1_FEEDBACK_REGEN_ENABLED=false)"
+        )  # noqa: E501
 
     from a1.healing.feedback_handler import handle_thumbs_down
 

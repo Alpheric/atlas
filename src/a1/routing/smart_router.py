@@ -14,15 +14,12 @@ The CorePipeline calls select() and gets back a RoutingDecision.
 
 from __future__ import annotations
 
-import functools
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 from a1.common.logging import get_logger
-from a1.common.tokens import count_tokens
 from a1.providers.registry import provider_registry
 
 log = get_logger("routing.smart_router")
@@ -55,19 +52,63 @@ def _default_config() -> dict:
     """Minimal fallback config when YAML is missing/corrupt."""
     return {
         "tasks": {
-            "general": {"primary": "atlas-plan", "fallbacks": ["gemini-2.5-flash"], "shadow": "atlas-plan"},
-            "coding": {"primary": "claude-sonnet-4-20250514", "fallbacks": ["gemini-2.5-pro", "qwen2.5-coder:7b"], "shadow": "atlas-code"},
-            "debugging": {"primary": "claude-sonnet-4-20250514", "fallbacks": ["gemini-2.5-pro"], "shadow": "atlas-code"},
-            "security": {"primary": "atlas-secure", "fallbacks": ["claude-sonnet-4-20250514"], "shadow": "atlas-secure"},
-            "infra": {"primary": "atlas-infra", "fallbacks": ["claude-sonnet-4-20250514"], "shadow": "atlas-infra"},
-            "data": {"primary": "atlas-data", "fallbacks": ["gemini-2.5-pro"], "shadow": "atlas-data"},
-            "documents": {"primary": "atlas-books", "fallbacks": ["gemini-1.5-pro"], "shadow": "atlas-books"},
-            "long_context": {"primary": "gemini-1.5-pro", "fallbacks": ["gemini-2.5-pro"], "shadow": "atlas-books"},
-            "embeddings": {"primary": "nomic-embed-text:latest", "fallbacks": ["llama3.2:latest"], "shadow": None},
-            "low_cost_background": {"primary": "gemini-2.0-flash-lite", "fallbacks": ["gemini-2.5-flash"], "shadow": None},
+            "general": {
+                "primary": "atlas-plan",
+                "fallbacks": ["gemini-2.5-flash"],
+                "shadow": "atlas-plan",
+            },  # noqa: E501
+            "coding": {
+                "primary": "claude-sonnet-4-20250514",
+                "fallbacks": ["gemini-2.5-pro", "qwen2.5-coder:7b"],
+                "shadow": "atlas-code",
+            },  # noqa: E501
+            "debugging": {
+                "primary": "claude-sonnet-4-20250514",
+                "fallbacks": ["gemini-2.5-pro"],
+                "shadow": "atlas-code",
+            },  # noqa: E501
+            "security": {
+                "primary": "atlas-secure",
+                "fallbacks": ["claude-sonnet-4-20250514"],
+                "shadow": "atlas-secure",
+            },  # noqa: E501
+            "infra": {
+                "primary": "atlas-infra",
+                "fallbacks": ["claude-sonnet-4-20250514"],
+                "shadow": "atlas-infra",
+            },  # noqa: E501
+            "data": {
+                "primary": "atlas-data",
+                "fallbacks": ["gemini-2.5-pro"],
+                "shadow": "atlas-data",
+            },  # noqa: E501
+            "documents": {
+                "primary": "atlas-books",
+                "fallbacks": ["gemini-1.5-pro"],
+                "shadow": "atlas-books",
+            },  # noqa: E501
+            "long_context": {
+                "primary": "gemini-1.5-pro",
+                "fallbacks": ["gemini-2.5-pro"],
+                "shadow": "atlas-books",
+            },  # noqa: E501
+            "embeddings": {
+                "primary": "nomic-embed-text:latest",
+                "fallbacks": ["llama3.2:latest"],
+                "shadow": None,
+            },  # noqa: E501
+            "low_cost_background": {
+                "primary": "gemini-2.0-flash-lite",
+                "fallbacks": ["gemini-2.5-flash"],
+                "shadow": None,
+            },  # noqa: E501
         },
         "context_routing": {"long_threshold": 180000, "long_model": "gemini-2.5-pro"},
-        "session_stickiness": {"enabled": True, "compatible_groups": [], "always_reroute": ["embeddings", "long_context"]},
+        "session_stickiness": {
+            "enabled": True,
+            "compatible_groups": [],
+            "always_reroute": ["embeddings", "long_context"],
+        },  # noqa: E501
     }
 
 
@@ -89,42 +130,56 @@ _ATLAS_TO_PROVIDER_MODEL: dict[str, str] = {
 }
 
 # Public aliases that should be treated as "Atlas" (auto-select)
-_ATLAS_PUBLIC_NAMES = frozenset({
-    "Atlas", "atlas", "atlas-plan", "atlas-code", "atlas-secure",
-    "atlas-infra", "atlas-data", "atlas-books", "atlas-audit",
-    "alpheric-1", "auto", "auto:fast", "auto:cheap", "local",
-})
+_ATLAS_PUBLIC_NAMES = frozenset(
+    {
+        "Atlas",
+        "atlas",
+        "atlas-plan",
+        "atlas-code",
+        "atlas-secure",
+        "atlas-infra",
+        "atlas-data",
+        "atlas-books",
+        "atlas-audit",
+        "alpheric-1",
+        "auto",
+        "auto:fast",
+        "auto:cheap",
+        "local",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # Routing decision dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RoutingDecision:
     """Everything the pipeline needs to execute and log a routing choice."""
 
     # Primary selection
-    primary_model: str = ""           # model to run (may be atlas-* or provider model)
-    primary_provider: str = ""        # provider name
-    provider_model: str = ""          # actual model name sent to the provider
+    primary_model: str = ""  # model to run (may be atlas-* or provider model)
+    primary_provider: str = ""  # provider name
+    provider_model: str = ""  # actual model name sent to the provider
     task_type: str = "general"
-    atlas_model: str | None = None    # atlas-* model if applicable
+    atlas_model: str | None = None  # atlas-* model if applicable
 
     # Fallback chain for the executor
     fallback_models: list[str] = field(default_factory=list)
 
     # Shadow / distillation
-    shadow_model: str | None = None   # atlas-* model to run in background
+    shadow_model: str | None = None  # atlas-* model to run in background
 
     # Context metadata
     context_tokens: int = 0
-    routing_mode: str = "balanced"    # quality / balanced / low_cost / local_first
+    routing_mode: str = "balanced"  # quality / balanced / low_cost / local_first
     confidence: float = 0.0
 
     # Session stickiness
-    is_sticky: bool = False           # True if re-using session's primary model
-    sticky_override: bool = False     # True if task change forced a switch
+    is_sticky: bool = False  # True if re-using session's primary model
+    sticky_override: bool = False  # True if task change forced a switch
 
     # Observability
     selection_reason: str = ""
@@ -134,6 +189,7 @@ class RoutingDecision:
 # ---------------------------------------------------------------------------
 # Core router
 # ---------------------------------------------------------------------------
+
 
 class SmartRouter:
     """Stateless routing engine — call select() per request."""

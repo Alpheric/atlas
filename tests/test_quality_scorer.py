@@ -3,8 +3,6 @@
 These are pure-unit tests — no DB, no LLM calls.
 """
 
-import pytest
-
 from a1.healing.quality_scorer import score_response
 
 
@@ -48,7 +46,7 @@ class TestTruncationDetection:
         # One ends with a period (complete), the other ends mid-word (truncated).
         # Same length → only the truncation signal differs.
         long_base = "Here is a thorough answer to your question about the topic " * 5
-        complete = long_base[:-1] + "."   # replace last char with period
+        complete = long_base[:-1] + "."  # replace last char with period
         truncated = long_base[:-1] + "x"  # replace last char with non-terminal letter
         assert len(complete) == len(truncated), "test setup: lengths must be equal"
         assert score_response(truncated, "chat") < score_response(complete, "chat")
@@ -72,7 +70,9 @@ class TestTaskFormatMatch:
         assert score_response(with_block, "code") > score_response(without_block, "code")
 
     def test_code_task_without_block_still_gets_partial_credit(self):
-        without_block = "You can use a for loop with range to iterate through numbers and print them."
+        without_block = (
+            "You can use a for loop with range to iterate through numbers and print them."  # noqa: E501
+        )
         s = score_response(without_block, "code")
         assert s > 0.3  # partial credit (0.05 format), but rest of signals still count
 

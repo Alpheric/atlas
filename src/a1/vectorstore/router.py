@@ -33,23 +33,22 @@ from sqlalchemy import delete, select, text
 
 from a1.common.auth import verify_api_key
 from a1.common.logging import get_logger
-from a1.common.tokens import count_tokens
 from a1.db.engine import async_session
 from a1.db.models import UploadedFile, VectorChunk, VectorStore
-from config.settings import settings
 
 log = get_logger("vectorstore")
 router = APIRouter()
 
-_DEFAULT_EMBED_MODEL = "text-embedding-3-small"   # → nomic-embed-text (768 dims, local)
+_DEFAULT_EMBED_MODEL = "text-embedding-3-small"  # → nomic-embed-text (768 dims, local)
 _CHUNK_TOKENS = 512
 _CHUNK_OVERLAP = 64
-_EMBED_BATCH = 64   # max texts per embedding call
+_EMBED_BATCH = 64  # max texts per embedding call
 
 
 # ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
+
 
 class CreateStoreRequest(BaseModel):
     name: str
@@ -104,6 +103,7 @@ class FileInStore(BaseModel):
 # Embedding helper (calls local /v1/embeddings)
 # ---------------------------------------------------------------------------
 
+
 async def _embed(texts: list[str], model: str = _DEFAULT_EMBED_MODEL) -> list[list[float]]:
     """Embed texts by calling the embeddings router logic directly (no HTTP round-trip)."""
     from a1.proxy.embeddings_router import _embed_ollama, _embed_vertex, _route
@@ -126,14 +126,19 @@ async def _embed(texts: list[str], model: str = _DEFAULT_EMBED_MODEL) -> list[li
 # Text chunking (reuse chunker's sentence splitter)
 # ---------------------------------------------------------------------------
 
-def _chunk_text(text: str, max_tokens: int = _CHUNK_TOKENS, overlap: int = _CHUNK_OVERLAP) -> list[str]:
+
+def _chunk_text(
+    text: str, max_tokens: int = _CHUNK_TOKENS, overlap: int = _CHUNK_OVERLAP
+) -> list[str]:
     from a1.chunking.chunker import split_into_chunks
+
     return split_into_chunks(text, max_tokens=max_tokens, overlap_tokens=overlap)
 
 
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.post("/v1/vector_stores", response_model=StoreObject)
 async def create_store(
@@ -156,19 +161,25 @@ async def create_store(
 @router.get("/v1/vector_stores", response_model=list[StoreObject])
 async def list_stores(_api_key: str = Depends(verify_api_key)) -> Any:
     from sqlalchemy import func
+
     async with async_session() as db:
-        rows = (await db.execute(
-            select(
-                VectorStore.id, VectorStore.name, VectorStore.created_at,
-                func.count(VectorChunk.id).label("chunk_count"),
+        rows = (
+            await db.execute(
+                select(
+                    VectorStore.id,
+                    VectorStore.name,
+                    VectorStore.created_at,
+                    func.count(VectorChunk.id).label("chunk_count"),
+                )
+                .outerjoin(VectorChunk, VectorChunk.store_id == VectorStore.id)
+                .group_by(VectorStore.id)
+                .order_by(VectorStore.created_at.desc())
             )
-            .outerjoin(VectorChunk, VectorChunk.store_id == VectorStore.id)
-            .group_by(VectorStore.id)
-            .order_by(VectorStore.created_at.desc())
-        )).all()
+        ).all()
     return [
         StoreObject(
-            id=r.id, name=r.name,
+            id=r.id,
+            name=r.name,
             created_at=int(r.created_at.timestamp()),
             chunk_count=r.chunk_count,
         )
@@ -179,20 +190,26 @@ async def list_stores(_api_key: str = Depends(verify_api_key)) -> Any:
 @router.get("/v1/vector_stores/{store_id}", response_model=StoreObject)
 async def get_store(store_id: str, _api_key: str = Depends(verify_api_key)) -> Any:
     from sqlalchemy import func
+
     async with async_session() as db:
-        row = (await db.execute(
-            select(
-                VectorStore.id, VectorStore.name, VectorStore.created_at,
-                func.count(VectorChunk.id).label("chunk_count"),
+        row = (
+            await db.execute(
+                select(
+                    VectorStore.id,
+                    VectorStore.name,
+                    VectorStore.created_at,
+                    func.count(VectorChunk.id).label("chunk_count"),
+                )
+                .outerjoin(VectorChunk, VectorChunk.store_id == VectorStore.id)
+                .where(VectorStore.id == store_id)
+                .group_by(VectorStore.id)
             )
-            .outerjoin(VectorChunk, VectorChunk.store_id == VectorStore.id)
-            .where(VectorStore.id == store_id)
-            .group_by(VectorStore.id)
-        )).first()
+        ).first()
     if not row:
         raise HTTPException(status_code=404, detail=f"Vector store '{store_id}' not found.")
     return StoreObject(
-        id=row.id, name=row.name,
+        id=row.id,
+        name=row.name,
         created_at=int(row.created_at.timestamp()),
         chunk_count=row.chunk_count,
     )
@@ -201,9 +218,9 @@ async def get_store(store_id: str, _api_key: str = Depends(verify_api_key)) -> A
 @router.delete("/v1/vector_stores/{store_id}")
 async def delete_store(store_id: str, _api_key: str = Depends(verify_api_key)) -> Any:
     async with async_session() as db:
-        row = (await db.execute(
-            select(VectorStore).where(VectorStore.id == store_id)
-        )).scalar_one_or_none()
+        row = (
+            await db.execute(select(VectorStore).where(VectorStore.id == store_id))
+        ).scalar_one_or_none()
         if not row:
             raise HTTPException(status_code=404, detail=f"Vector store '{store_id}' not found.")
         await db.execute(delete(VectorStore).where(VectorStore.id == store_id))
@@ -220,15 +237,15 @@ async def add_file_to_store(
 ) -> Any:
     """Chunk a previously-uploaded file, embed each chunk, persist to vector store."""
     async with async_session() as db:
-        store = (await db.execute(
-            select(VectorStore).where(VectorStore.id == store_id)
-        )).scalar_one_or_none()
+        store = (
+            await db.execute(select(VectorStore).where(VectorStore.id == store_id))
+        ).scalar_one_or_none()
         if not store:
             raise HTTPException(status_code=404, detail=f"Vector store '{store_id}' not found.")
 
-        file_row = (await db.execute(
-            select(UploadedFile).where(UploadedFile.id == body.file_id)
-        )).scalar_one_or_none()
+        file_row = (
+            await db.execute(select(UploadedFile).where(UploadedFile.id == body.file_id))
+        ).scalar_one_or_none()
         if not file_row:
             raise HTTPException(status_code=404, detail=f"File '{body.file_id}' not found.")
 
@@ -249,7 +266,7 @@ async def add_file_to_store(
     # Embed in batches
     all_embeddings: list[list[float]] = []
     for i in range(0, len(chunks), _EMBED_BATCH):
-        batch = chunks[i:i + _EMBED_BATCH]
+        batch = chunks[i : i + _EMBED_BATCH]
         try:
             embs = await _embed(batch, model=body.embedding_model)
             all_embeddings.extend(embs)
@@ -260,17 +277,21 @@ async def add_file_to_store(
     async with async_session() as db:
         async with db.begin():
             for idx, (chunk_text, emb) in enumerate(zip(chunks, all_embeddings)):
-                db.add(VectorChunk(
-                    store_id=store_id,
-                    file_id=body.file_id,
-                    filename=file_row.filename,
-                    chunk_index=idx,
-                    content=chunk_text,
-                    embedding=emb,
-                    model=body.embedding_model,
-                ))
+                db.add(
+                    VectorChunk(
+                        store_id=store_id,
+                        file_id=body.file_id,
+                        filename=file_row.filename,
+                        chunk_index=idx,
+                        content=chunk_text,
+                        embedding=emb,
+                        model=body.embedding_model,
+                    )
+                )
 
-    log.info(f"[vectorstore] stored {len(chunks)} chunks from file={body.file_id} in store={store_id}")
+    log.info(
+        f"[vectorstore] stored {len(chunks)} chunks from file={body.file_id} in store={store_id}"
+    )
     return {
         "store_id": store_id,
         "file_id": body.file_id,
@@ -286,12 +307,14 @@ async def list_files_in_store(
     _api_key: str = Depends(verify_api_key),
 ) -> Any:
     async with async_session() as db:
-        rows = (await db.execute(
-            select(VectorChunk.file_id, VectorChunk.filename, VectorChunk.created_at)
-            .where(VectorChunk.store_id == store_id)
-            .distinct(VectorChunk.file_id)
-            .order_by(VectorChunk.file_id, VectorChunk.created_at)
-        )).all()
+        rows = (
+            await db.execute(
+                select(VectorChunk.file_id, VectorChunk.filename, VectorChunk.created_at)
+                .where(VectorChunk.store_id == store_id)
+                .distinct(VectorChunk.file_id)
+                .order_by(VectorChunk.file_id, VectorChunk.created_at)
+            )
+        ).all()
 
         # Count chunks per file
         file_counts: dict[str, int] = {}
@@ -303,11 +326,13 @@ async def list_files_in_store(
             file_counts[fid] = file_counts.get(fid, 0) + 1
 
         # Re-query for accurate counts
-        all_chunks = (await db.execute(
-            select(VectorChunk.file_id, VectorChunk.filename, VectorChunk.created_at)
-            .where(VectorChunk.store_id == store_id)
-            .order_by(VectorChunk.created_at)
-        )).all()
+        all_chunks = (
+            await db.execute(
+                select(VectorChunk.file_id, VectorChunk.filename, VectorChunk.created_at)
+                .where(VectorChunk.store_id == store_id)
+                .order_by(VectorChunk.created_at)
+            )
+        ).all()
 
     file_chunks: dict[str, list] = {}
     for row in all_chunks:
@@ -355,9 +380,9 @@ async def search_store(
     """Embed the query and return the top-k most similar chunks."""
     # Verify store exists
     async with async_session() as db:
-        store = (await db.execute(
-            select(VectorStore).where(VectorStore.id == store_id)
-        )).scalar_one_or_none()
+        store = (
+            await db.execute(select(VectorStore).where(VectorStore.id == store_id))
+        ).scalar_one_or_none()
         if not store:
             raise HTTPException(status_code=404, detail=f"Vector store '{store_id}' not found.")
 
@@ -372,8 +397,9 @@ async def search_store(
     top_k = min(body.top_k, 100)
 
     async with async_session() as db:
-        rows = (await db.execute(
-            text("""
+        rows = (
+            await db.execute(
+                text("""
                 SELECT id, file_id, filename, chunk_index, content,
                        1 - (embedding <=> CAST(:qvec AS vector)) AS score
                 FROM vector_chunks
@@ -381,8 +407,9 @@ async def search_store(
                 ORDER BY embedding <=> CAST(:qvec AS vector)
                 LIMIT :k
             """),
-            {"sid": store_id, "qvec": query_vec, "k": top_k},
-        )).fetchall()
+                {"sid": store_id, "qvec": query_vec, "k": top_k},
+            )
+        ).fetchall()
 
     results = [
         ChunkResult(

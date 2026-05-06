@@ -16,26 +16,22 @@ _CACHE_TTL = 60.0
 _CLASSIFIER_PROMPT = (
     "Classify the following request into exactly one task type. "
     "Output only the task type, nothing else.\n\n"
-    "Valid types: code, chat, analysis, creative, summarization, "
-    "translation, math, structured_extraction, general, infra\n\n"
+    "Valid types: coding, general, security, reasoning, documents, data, infra\n\n"
     "Request: {text}\n\nTask type:"
 )
 
 
 TASK_TYPES = [
-    "code",
-    "chat",
-    "analysis",
-    "creative",
-    "summarization",
-    "translation",
-    "math",
-    "structured_extraction",
+    "coding",
     "general",
+    "security",
+    "reasoning",
+    "documents",
+    "data",
     "infra",
 ]
 
-# P1: Security/data analysis keyword pattern — triggers analysis regardless of message length
+# P1: Security keyword pattern — triggers security classification regardless of message length
 SECURITY_ANALYSIS_PATTERNS = re.compile(
     r"vulnerability|CVE-\d|threat\s+model|audit|anomaly|dataset\b|data\s+leak|"
     r"pentest|sql\s+injection|xss|csrf|attack\s+surface|compliance\b|"
@@ -131,45 +127,34 @@ def classify_task(request: ChatCompletionRequest) -> tuple[str, float]:
     # Priority order matters — more specific patterns first
 
     if features.has_tools and features.has_code_markers:
-        return "code", conf
+        return "coding", conf
 
-    # Only classify as code if user message (not system prompt) has code markers
-    # and the message is medium+ length — short messages with code keywords are likely chat
-    if features.has_code_markers and features.token_count_bucket in ("medium", "long", "very_long"):
-        return "code", conf
+    # Code markers → coding task (short or long)
+    if features.has_code_markers:
+        return "coding", conf
 
-    if features.has_code_markers and features.token_count_bucket == "short":
-        return "chat", conf  # short messages with code words → likely casual chat
-
-    # P1: Security/data keywords → analysis regardless of message length.
-    # Checked before math/translation/etc. because security terms take priority
-    # (e.g. "CVE-2023-1234" falsely triggers math via the subtraction regex).
+    # P1: Security keywords take priority over math/translation/etc.
+    # (e.g. "CVE-2023-1234" falsely triggers math via the subtraction regex)
     full_text = " ".join(m.content or "" for m in request.messages)
     if SECURITY_ANALYSIS_PATTERNS.search(full_text):
-        return "analysis", conf
+        return "security", conf
 
     if features.has_math_markers:
-        return "math", conf
+        return "reasoning", conf
 
     if features.has_translation_cues:
-        return "translation", conf
+        return "documents", conf
 
     if features.has_summarization_cues:
-        return "summarization", conf
+        return "documents", conf
 
     if features.has_structured_output_cues:
-        return "structured_extraction", conf
+        return "data", conf
 
     if features.has_tools:
-        return "code", conf  # tool use often implies agentic/code tasks
+        return "coding", conf  # tool use often implies agentic/code tasks
 
     if features.token_count_bucket == "very_long" and features.has_system_prompt:
-        return "analysis", conf
-
-    if features.token_count_bucket == "short" and not features.has_system_prompt:
-        return "chat", conf
-
-    if features.has_question_markers and features.token_count_bucket in ("short", "medium"):
-        return "chat", conf
+        return "reasoning", conf
 
     return "general", conf

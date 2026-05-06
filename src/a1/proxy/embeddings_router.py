@@ -49,8 +49,8 @@ _VERTEX_MODELS = {
     "gemini-embedding-2-preview",
 }
 
-_OLLAMA_MODEL = "nomic-embed-text:latest"   # 768 dims
-_VERTEX_MODEL = "gemini-embedding-001"       # 3072 dims
+_OLLAMA_MODEL = "nomic-embed-text:latest"  # 768 dims
+_VERTEX_MODEL = "gemini-embedding-001"  # 3072 dims
 
 
 def _route(requested_model: str) -> str:
@@ -65,11 +65,12 @@ def _route(requested_model: str) -> str:
 # Request / Response models
 # ---------------------------------------------------------------------------
 
+
 class EmbeddingRequest(BaseModel):
     model: str = "text-embedding-3-small"
     input: str | list[str]
-    encoding_format: str = "float"   # "float" | "base64"  (base64 not supported, ignored)
-    dimensions: int | None = None    # ignored — determined by model
+    encoding_format: str = "float"  # "float" | "base64"  (base64 not supported, ignored)
+    dimensions: int | None = None  # ignored — determined by model
 
 
 class EmbeddingObject(BaseModel):
@@ -93,6 +94,7 @@ class EmbeddingResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Provider implementations
 # ---------------------------------------------------------------------------
+
 
 async def _embed_ollama(texts: list[str]) -> list[list[float]]:
     """Call Ollama /api/embed — supports batch input natively."""
@@ -144,7 +146,9 @@ async def _embed_vertex(texts: list[str]) -> list[list[float]]:
     embeddings: list[list[float]] = []
     for i, r in enumerate(results):
         if isinstance(r, Exception):
-            raise HTTPException(status_code=502, detail=f"Vertex embedding failed for item {i}: {r}")
+            raise HTTPException(
+                status_code=502, detail=f"Vertex embedding failed for item {i}: {r}"
+            )
         embeddings.append(r)  # type: ignore[arg-type]
     return embeddings
 
@@ -152,6 +156,7 @@ async def _embed_vertex(texts: list[str]) -> list[list[float]]:
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
+
 
 @router.post("/v1/embeddings", response_model=EmbeddingResponse)
 async def create_embeddings(
@@ -199,7 +204,7 @@ async def create_embeddings(
     log.info(
         f"[embeddings] model={resolved_model} provider={provider} "
         f"n={len(texts)} dims={len(embeddings[0])} "
-        f"latency={int((time.time()-t0)*1000)}ms"
+        f"latency={int((time.time() - t0) * 1000)}ms"
     )
 
     return EmbeddingResponse(

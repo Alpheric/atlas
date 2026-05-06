@@ -8,7 +8,6 @@ Set TAVILY_API_KEY (or A1_TAVILY_API_KEY) in your .env file.
 """
 
 import urllib.parse
-from datetime import datetime
 
 import httpx
 
@@ -43,7 +42,7 @@ class TavilyProvider(SearchProvider):
             "query": query,
             "search_depth": self._search_depth,
             "max_results": max_results,
-            "include_answer": False,   # we build our own answer via the LLM
+            "include_answer": False,  # we build our own answer via the LLM
             "include_raw_content": False,
             "include_images": False,
         }

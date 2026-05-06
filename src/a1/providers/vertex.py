@@ -57,8 +57,8 @@ _ALIASES: dict[str, str] = {
     "vertex_gemini_1_5_flash": "gemini-1.5-flash",
     "vertex_gemini_1_5_pro": "gemini-1.5-pro",
     # Short names
-    "gemini-pro": "gemini-2.5-pro",       # latest pro
-    "gemini-flash": "gemini-2.5-flash",   # latest flash
+    "gemini-pro": "gemini-2.5-pro",  # latest pro
+    "gemini-flash": "gemini-2.5-flash",  # latest flash
     "gemini-latest": "gemini-2.5-pro",
 }
 
@@ -113,7 +113,9 @@ def _classify_error(status_code: int, body: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _openai_parts_to_gemini(parts: list, fetched: dict[str, tuple[str, str]] | None = None) -> list[dict]:
+def _openai_parts_to_gemini(  # noqa: E501
+    parts: list, fetched: dict[str, tuple[str, str]] | None = None
+) -> list[dict]:
     """Convert OpenAI multimodal content parts to Gemini API parts.
 
     OpenAI format:
@@ -183,7 +185,9 @@ async def _fetch_image_urls(messages: list) -> dict[str, tuple[str, str]]:
                 content_type = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
                 b64 = base64.b64encode(resp.content).decode()
                 fetched[url] = (b64, content_type)
-                log.debug(f"[vertex] fetched image {url[:60]} ({content_type}, {len(resp.content)}B)")
+                log.debug(
+                    f"[vertex] fetched image {url[:60]} ({content_type}, {len(resp.content)}B)"
+                )  # noqa: E501
             except Exception as e:
                 log.warning(f"[vertex] failed to fetch image {url[:60]}: {e}")
     return fetched
@@ -206,7 +210,7 @@ class VertexProvider(LLMProvider):
     name = "vertex"
 
     def __init__(self):
-        self.auth_type: str = settings.vertex_auth_type          # "api_key" | "service_account"
+        self.auth_type: str = settings.vertex_auth_type  # "api_key" | "service_account"
         self.api_key: str = settings.vertex_api_key
         self.project_id: str = settings.vertex_project_id
         self.location: str = settings.vertex_location
@@ -322,7 +326,9 @@ class VertexProvider(LLMProvider):
             return self._api_key_endpoint(model, stream)
         else:
             if not self.project_id:
-                log.warning("[vertex] service_account auth_type but no vertex_project_id configured")
+                log.warning(
+                    "[vertex] service_account auth_type but no vertex_project_id configured"
+                )  # noqa: E501
                 return None, None
             bearer = await self._get_sa_bearer()
             if not bearer:
@@ -361,7 +367,7 @@ class VertexProvider(LLMProvider):
                     if not isinstance(msg, dict)
                     else msg.get("tool_call_id")
                 ) or "unknown"
-                fn_name = tool_call_id  # Gemini needs the function name; use tool_call_id as fallback
+                fn_name = tool_call_id  # Gemini needs the function name; use tool_call_id as fallback  # noqa: E501
                 # Try to recover the real function name from the prior assistant message
                 for prev in reversed(contents):
                     if prev.get("role") == "model":
@@ -457,13 +463,23 @@ class VertexProvider(LLMProvider):
                 if fn is None:
                     continue
                 fn_name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", "")
-                fn_desc = fn.get("description", "") if isinstance(fn, dict) else getattr(fn, "description", "")
-                fn_params = fn.get("parameters", {}) if isinstance(fn, dict) else getattr(fn, "parameters", {})
-                fn_decls.append({
-                    "name": fn_name,
-                    "description": fn_desc or "",
-                    "parameters": fn_params or {"type": "object", "properties": {}},
-                })
+                fn_desc = (
+                    fn.get("description", "")
+                    if isinstance(fn, dict)
+                    else getattr(fn, "description", "")
+                )  # noqa: E501
+                fn_params = (
+                    fn.get("parameters", {})
+                    if isinstance(fn, dict)
+                    else getattr(fn, "parameters", {})
+                )  # noqa: E501
+                fn_decls.append(
+                    {
+                        "name": fn_name,
+                        "description": fn_desc or "",
+                        "parameters": fn_params or {"type": "object", "properties": {}},
+                    }
+                )
             if fn_decls:
                 tools_payload.append({"function_declarations": fn_decls})
 
@@ -516,14 +532,18 @@ class VertexProvider(LLMProvider):
                 tool_calls_out = []
                 for fc in fn_call_parts:
                     args = fc.get("args", {})
-                    tool_calls_out.append({
-                        "id": f"call_{uuid.uuid4().hex[:8]}",
-                        "type": "function",
-                        "function": {
-                            "name": fc.get("name", "unknown"),
-                            "arguments": json.dumps(args) if isinstance(args, dict) else (args or "{}"),
-                        },
-                    })
+                    tool_calls_out.append(
+                        {
+                            "id": f"call_{uuid.uuid4().hex[:8]}",
+                            "type": "function",
+                            "function": {
+                                "name": fc.get("name", "unknown"),
+                                "arguments": json.dumps(args)
+                                if isinstance(args, dict)
+                                else (args or "{}"),  # noqa: E501
+                            },
+                        }
+                    )
                 finish_reason = "tool_calls"
 
             # Grounding metadata
@@ -582,8 +602,9 @@ class VertexProvider(LLMProvider):
             raise RuntimeError("[vertex] No valid auth configuration — cannot dispatch request")
 
         fetched_images = await _fetch_image_urls(request.messages)
-        payload = self._build_payload(request, model, use_web_search=use_web_search,
-                                      fetched_images=fetched_images)
+        payload = self._build_payload(
+            request, model, use_web_search=use_web_search, fetched_images=fetched_images
+        )
         request_id = f"vtx-{uuid.uuid4().hex[:12]}"
 
         resp = await self._client.post(url, headers=headers, json=payload)
@@ -624,8 +645,9 @@ class VertexProvider(LLMProvider):
             raise RuntimeError("[vertex] No valid auth configuration — cannot stream")
 
         fetched_images = await _fetch_image_urls(request.messages)
-        payload = self._build_payload(request, model, use_web_search=use_web_search,
-                                      fetched_images=fetched_images)
+        payload = self._build_payload(
+            request, model, use_web_search=use_web_search, fetched_images=fetched_images
+        )
         chunk_id = f"vtx-{uuid.uuid4().hex[:12]}"
 
         # Send role header chunk first
@@ -641,9 +663,7 @@ class VertexProvider(LLMProvider):
             if stream_resp.status_code != 200:
                 body = await stream_resp.aread()
                 err_type = _classify_error(stream_resp.status_code, body.decode())
-                raise RuntimeError(
-                    f"Vertex stream error {stream_resp.status_code}: {err_type}"
-                )
+                raise RuntimeError(f"Vertex stream error {stream_resp.status_code}: {err_type}")
 
             async for line in stream_resp.aiter_lines():
                 if not line or not line.startswith("data:"):
@@ -666,7 +686,9 @@ class VertexProvider(LLMProvider):
                 raw_finish = cand.get("finishReason")
                 finish_reason: str | None = None
                 if raw_finish and raw_finish not in ("", "FINISH_REASON_UNSPECIFIED", None):
-                    finish_reason = "stop" if raw_finish in ("STOP", "END_OF_TURN") else raw_finish.lower()
+                    finish_reason = (
+                        "stop" if raw_finish in ("STOP", "END_OF_TURN") else raw_finish.lower()
+                    )  # noqa: E501
 
                 # Accumulate grounding
                 gm = cand.get("groundingMetadata")
@@ -704,9 +726,7 @@ class VertexProvider(LLMProvider):
         )
 
         if grounding_accumulated and grounding_accumulated.chunks:
-            log.debug(
-                f"[vertex] Stream grounding: {len(grounding_accumulated.chunks)} sources"
-            )
+            log.debug(f"[vertex] Stream grounding: {len(grounding_accumulated.chunks)} sources")
 
     # ------------------------------------------------------------------
     # Health check

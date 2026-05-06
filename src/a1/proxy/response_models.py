@@ -34,6 +34,7 @@ class ChatCompletionResponse(BaseModel):
     provider: str | None = None
     task_type: str | None = None
     routing_strategy: str | None = None
+    grounding_metadata: dict | None = None
 
 
 class AtlasError(BaseModel):

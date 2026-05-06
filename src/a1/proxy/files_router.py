@@ -35,7 +35,12 @@ log = get_logger("proxy.files")
 router = APIRouter()
 
 _ALLOWED_PURPOSES = {
-    "assistants", "batch", "fine-tune", "vision", "user_data", "evals",
+    "assistants",
+    "batch",
+    "fine-tune",
+    "vision",
+    "user_data",
+    "evals",
 }
 
 _MIME_FALLBACK = "application/octet-stream"
@@ -44,6 +49,7 @@ _MIME_FALLBACK = "application/octet-stream"
 # ---------------------------------------------------------------------------
 # Response schemas
 # ---------------------------------------------------------------------------
+
 
 class FileObject(BaseModel):
     id: str
@@ -68,6 +74,7 @@ class DeleteResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _to_file_object(row: UploadedFile) -> FileObject:
     return FileObject(
@@ -94,6 +101,7 @@ def _file_dir(file_id: str) -> Path:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.post("/v1/files", response_model=FileObject)
 async def upload_file(
@@ -168,7 +176,9 @@ async def retrieve_file(
     _api_key: str = Depends(verify_api_key),
 ) -> Any:
     async with async_session() as db:
-        row = (await db.execute(select(UploadedFile).where(UploadedFile.id == file_id))).scalar_one_or_none()
+        row = (
+            await db.execute(select(UploadedFile).where(UploadedFile.id == file_id))
+        ).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail=f"File '{file_id}' not found.")
     return _to_file_object(row)
@@ -180,7 +190,9 @@ async def delete_file(
     _api_key: str = Depends(verify_api_key),
 ) -> Any:
     async with async_session() as db:
-        row = (await db.execute(select(UploadedFile).where(UploadedFile.id == file_id))).scalar_one_or_none()
+        row = (
+            await db.execute(select(UploadedFile).where(UploadedFile.id == file_id))
+        ).scalar_one_or_none()
         if not row:
             raise HTTPException(status_code=404, detail=f"File '{file_id}' not found.")
         storage_path = row.storage_path
@@ -208,7 +220,9 @@ async def download_file(
     _api_key: str = Depends(verify_api_key),
 ) -> Any:
     async with async_session() as db:
-        row = (await db.execute(select(UploadedFile).where(UploadedFile.id == file_id))).scalar_one_or_none()
+        row = (
+            await db.execute(select(UploadedFile).where(UploadedFile.id == file_id))
+        ).scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail=f"File '{file_id}' not found.")
 

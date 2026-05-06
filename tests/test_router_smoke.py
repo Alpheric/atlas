@@ -76,6 +76,7 @@ def client():
         patch("a1.proxy.atlas_router.verify_api_key", return_value="dev"),
         patch("a1.proxy.openai_router.get_db", mock_get_db),
         patch("a1.proxy.responses_router.get_db", mock_get_db),
+        patch("a1.common.auth.settings") as mock_auth_settings,
     ):
         mock_settings.session_enabled = False
         mock_settings.pii_masking_enabled = False
@@ -85,6 +86,7 @@ def client():
         mock_settings.distillation_task_repeat_threshold = 0
         mock_settings.planning_max_depth = 3
         mock_settings.planning_max_workers = 5
+        mock_auth_settings.api_keys = []  # empty → auth returns "dev" without DB check
 
         from a1.app import create_app
 

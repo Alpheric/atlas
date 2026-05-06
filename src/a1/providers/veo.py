@@ -24,7 +24,6 @@ Config: see config/providers.yaml veo section.
 """
 
 import asyncio
-import json
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -48,12 +47,12 @@ class VeoRequest:
 
     prompt: str
     model: str = "veo-3.0-generate-preview"
-    aspect_ratio: str = "16:9"           # "16:9" | "9:16"
-    duration_seconds: int = 8            # 5–8 supported
+    aspect_ratio: str = "16:9"  # "16:9" | "9:16"
+    duration_seconds: int = 8  # 5–8 supported
     negative_prompt: str = ""
     seed: int | None = None
-    image_url: str = ""                  # optional: image-to-video base frame (GCS URI or https)
-    enhance_prompt: bool = True          # let Veo rewrite prompt for better results
+    image_url: str = ""  # optional: image-to-video base frame (GCS URI or https)
+    enhance_prompt: bool = True  # let Veo rewrite prompt for better results
 
 
 @dataclass
@@ -62,8 +61,8 @@ class VeoResult:
 
     operation_id: str
     model: str
-    video_uri: str = ""               # GCS URI: gs://bucket/path/video.mp4
-    video_download_url: str = ""      # signed HTTPS URL (if generated)
+    video_uri: str = ""  # GCS URI: gs://bucket/path/video.mp4
+    video_download_url: str = ""  # signed HTTPS URL (if generated)
     duration_seconds: float = 0.0
     aspect_ratio: str = "16:9"
     cost_usd: float = 0.0
@@ -110,8 +109,8 @@ class VeoProvider:
     """
 
     name = "veo"
-    _DEFAULT_POLL_INTERVAL = 5.0    # seconds between operation polls
-    _MAX_POLL_SECONDS = 300         # 5-minute timeout for video generation
+    _DEFAULT_POLL_INTERVAL = 5.0  # seconds between operation polls
+    _MAX_POLL_SECONDS = 300  # 5-minute timeout for video generation
 
     def __init__(self):
         self.project_id = settings.vertex_project_id
@@ -184,8 +183,11 @@ class VeoProvider:
         if req.negative_prompt:
             instance["negativePrompt"] = req.negative_prompt
         if req.image_url:
-            instance["image"] = {"gcsUri": req.image_url} if req.image_url.startswith("gs://") \
+            instance["image"] = (
+                {"gcsUri": req.image_url}
+                if req.image_url.startswith("gs://")
                 else {"bytesBase64Encoded": req.image_url}
+            )
 
         parameters: dict = {
             "aspectRatio": req.aspect_ratio,
@@ -217,16 +219,20 @@ class VeoProvider:
 
         headers = await self._auth_headers()
         if headers is None:
-            raise RuntimeError("[veo] No valid auth — set A1_VERTEX_PROJECT_ID or A1_VERTEX_API_KEY")
+            raise RuntimeError(
+                "[veo] No valid auth — set A1_VERTEX_PROJECT_ID or A1_VERTEX_API_KEY"
+            )
 
         t0 = time.time()
         model = req.model
         url = self._generate_url(model)
         payload = self._build_payload(req)
-        op_id = f"veo-{uuid.uuid4().hex[:12]}"
+        _op_id = f"veo-{uuid.uuid4().hex[:12]}"
 
-        log.info(f"[veo] Submitting generation: model={model} aspect={req.aspect_ratio} "
-                 f"duration={req.duration_seconds}s prompt={req.prompt[:60]!r}")
+        log.info(
+            f"[veo] Submitting generation: model={model} aspect={req.aspect_ratio} "
+            f"duration={req.duration_seconds}s prompt={req.prompt[:60]!r}"
+        )
 
         # Step 1: Submit job
         resp = await self._client.post(url, headers=headers, json=payload)
@@ -274,7 +280,7 @@ class VeoProvider:
             poll_resp = await self._client.get(op_url, headers=current_headers)
             if poll_resp.status_code != 200:
                 log.warning(f"[veo] Poll error {poll_resp.status_code}: {poll_resp.text[:100]}")
-                interval = min(interval * 1.5, 30)   # backoff
+                interval = min(interval * 1.5, 30)  # backoff
                 continue
 
             op_data = poll_resp.json()

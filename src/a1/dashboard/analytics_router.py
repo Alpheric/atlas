@@ -54,25 +54,28 @@ async def overview(db: AsyncSession = Depends(get_db)):
     agg_row = agg.one()
 
     prov_dist = await db.execute(
-        select(RoutingDecision.provider, func.count(RoutingDecision.id).label("cnt"))
-        .group_by(RoutingDecision.provider)
+        select(RoutingDecision.provider, func.count(RoutingDecision.id).label("cnt")).group_by(
+            RoutingDecision.provider
+        )
     )
     provider_counts_db = {row.provider: row.cnt for row in prov_dist}
 
     model_dist = await db.execute(
-        select(RoutingDecision.model, func.count(RoutingDecision.id).label("cnt"))
-        .group_by(RoutingDecision.model)
+        select(RoutingDecision.model, func.count(RoutingDecision.id).label("cnt")).group_by(
+            RoutingDecision.model
+        )
     )
     model_counts_db = {row.model: row.cnt for row in model_dist}
 
     local_dist = await db.execute(
-        select(RoutingDecision.is_local, func.count(RoutingDecision.id).label("cnt"))
-        .group_by(RoutingDecision.is_local)
+        select(RoutingDecision.is_local, func.count(RoutingDecision.id).label("cnt")).group_by(
+            RoutingDecision.is_local
+        )
     )
-    local_map   = {row.is_local: row.cnt for row in local_dist}
+    local_map = {row.is_local: row.cnt for row in local_dist}
     local_count = local_map.get(True, 0)
-    total_reqs  = int(agg_row.total_requests or 0)
-    local_pct   = round((local_count / total_reqs * 100) if total_reqs > 0 else 0, 1)
+    total_reqs = int(agg_row.total_requests or 0)
+    local_pct = round((local_count / total_reqs * 100) if total_reqs > 0 else 0, 1)
 
     recent_result = await db.execute(
         select(RoutingDecision).order_by(RoutingDecision.created_at.desc()).limit(20)
@@ -81,8 +84,7 @@ async def overview(db: AsyncSession = Depends(get_db)):
 
     # Count self-healed responses (new self-heal column)
     healed_result = await db.execute(
-        select(func.count(RoutingDecision.id))
-        .where(RoutingDecision.self_healed.is_(True))
+        select(func.count(RoutingDecision.id)).where(RoutingDecision.self_healed.is_(True))
     )
     self_healed_count = int(healed_result.scalar() or 0)
 
@@ -123,6 +125,7 @@ async def overview(db: AsyncSession = Depends(get_db)):
     pool_status = []
     try:
         from a1.providers.claude_cli import ClaudeCLIPool
+
         cli_obj = provider_registry.get_provider("claude-cli")
         if isinstance(cli_obj, ClaudeCLIPool):
             pool_status = cli_obj.pool_status()
@@ -134,6 +137,7 @@ async def overview(db: AsyncSession = Depends(get_db)):
     try:
         from a1.db.repositories import TaskTypeReadinessRepo
         from config.settings import settings as _settings
+
         readiness_repo = TaskTypeReadinessRepo(db)
         task_types = await readiness_repo.list_all()
         distillation_summary = {
@@ -145,8 +149,11 @@ async def overview(db: AsyncSession = Depends(get_db)):
                     "claude_samples": tt.claude_sample_count,
                     "training_threshold": _settings.distillation_min_samples,
                     "local_handoff_pct": round(float(tt.local_handoff_pct or 0) * 100, 1),
-                    "ready_for_training": tt.claude_sample_count >= _settings.distillation_min_samples,
-                    "remaining": max(0, _settings.distillation_min_samples - tt.claude_sample_count),
+                    "ready_for_training": tt.claude_sample_count
+                    >= _settings.distillation_min_samples,  # noqa: E501
+                    "remaining": max(
+                        0, _settings.distillation_min_samples - tt.claude_sample_count
+                    ),  # noqa: E501
                 }
                 for tt in task_types
             ],
@@ -394,7 +401,6 @@ async def search_history(
 
     Returns daily counts, average latency, provider usage, and block rate.
     """
-    from datetime import timezone as _tz
 
     from sqlalchemy import func, select
 
@@ -440,9 +446,7 @@ async def search_providers():
     return {
         "available": search_registry.is_available(),
         "active": (
-            search_registry.active_provider.name
-            if search_registry.active_provider
-            else None
+            search_registry.active_provider.name if search_registry.active_provider else None
         ),
         "providers": search_registry.status(),
     }
@@ -457,9 +461,7 @@ async def search_citations(
     from a1.db.models import WebCitation
 
     result = await db.execute(
-        select(WebCitation)
-        .order_by(WebCitation.accessed_at.desc())
-        .limit(limit)
+        select(WebCitation).order_by(WebCitation.accessed_at.desc()).limit(limit)
     )
     citations = result.scalars().all()
     return {

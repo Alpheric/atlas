@@ -24,7 +24,7 @@ _STRONG_TRIGGERS: list[tuple[re.Pattern, int]] = [
     (re.compile(r"\b(latest|current|recent|up.?to.?date|real.?time|live)\b", re.I), 25),
     (re.compile(r"\btoday|right now|this week|this month|as of \d{4}\b", re.I), 25),
     (re.compile(r"\b(news|headline|breaking|just (released|announced|launched))\b", re.I), 25),
-    (re.compile(r"\b(search|look up|google|find online|browse the web)\b", re.I), 30),  # explicit request
+    (re.compile(r"\b(search|look up|google|find online|browse the web)\b", re.I), 30),  # noqa: E501
     (re.compile(r"\b(cite|citation|source|reference|according to|link me)\b", re.I), 25),
 ]
 
@@ -45,7 +45,7 @@ _WEAK_TRIGGERS: list[tuple[re.Pattern, int]] = [
     (re.compile(r"\b(what is|tell me about|explain|describe)\b", re.I), 5),
     (re.compile(r"\b(compare|versus|vs\.?)\b", re.I), 5),
     (re.compile(r"\b(best|top|recommended|popular)\b", re.I), 8),
-    (re.compile(r"\?$", re.I), 3),           # ends with a question mark
+    (re.compile(r"\?$", re.I), 3),  # ends with a question mark
     (re.compile(r"\b(2024|2025|2026)\b"), 8),  # specific recent year mentioned
 ]
 
@@ -58,7 +58,7 @@ _SUPPRESS_TRIGGERS: list[tuple[re.Pattern, int]] = [
     (re.compile(r"\b(joke|poem|story|write me|generate|create)\b", re.I), -15),
 ]
 
-_SEARCH_THRESHOLD = 50    # score >= this triggers a search (two strong signals = 50)
+_SEARCH_THRESHOLD = 50  # score >= this triggers a search (two strong signals = 50)
 _OPTIONAL_THRESHOLD = 25  # score in [25, 50) — could search if configured aggressively
 
 
@@ -122,7 +122,9 @@ def extract_search_query(messages: list) -> str:
     user_text = ""
     for msg in reversed(messages):
         role = getattr(msg, "role", "") or (msg.get("role", "") if isinstance(msg, dict) else "")
-        content = getattr(msg, "content", "") or (msg.get("content", "") if isinstance(msg, dict) else "")
+        content = getattr(msg, "content", "") or (  # noqa: E501
+            msg.get("content", "") if isinstance(msg, dict) else ""
+        )
         if role == "user" and content:
             user_text = content
             break

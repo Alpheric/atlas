@@ -10,8 +10,7 @@ This module then connects those markers back to the actual URLs.
 """
 
 import re
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 
 
 @dataclass
@@ -20,15 +19,15 @@ class Citation:
 
     source_url: str
     title: str
-    published_date: str       # ISO date string or empty
-    accessed_at: str          # ISO datetime (IST)
+    published_date: str  # ISO date string or empty
+    accessed_at: str  # ISO datetime (IST)
     claim_supported: bool = True
-    rank: int = 0             # position in search results (1-based)
-    snippet: str = ""         # brief excerpt from the source
+    rank: int = 0  # position in search results (1-based)
+    snippet: str = ""  # brief excerpt from the source
 
 
 def build_citations(
-    search_results: list,       # list[SearchResult]
+    search_results: list,  # list[SearchResult]
     response_text: str,
     accessed_at: str | None = None,
 ) -> list[Citation]:

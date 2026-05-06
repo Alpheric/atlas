@@ -5,15 +5,13 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from a1.common.auth import hash_key
 from a1.common.logging import get_logger
-from a1.common.tz import now_ist
-from a1.db.engine import async_session
-from a1.db.models import ApiKey, User, UsageRecord
+from a1.db.models import ApiKey, UsageRecord, User
 from a1.dependencies import get_db
 
 log = get_logger("dashboard.users")
@@ -43,7 +41,7 @@ class UserUpdate(BaseModel):
 
 class KeyCreate(BaseModel):
     name: str
-    rate_limit: int | None = None   # overrides user default if set
+    rate_limit: int | None = None  # overrides user default if set
     expires_at: datetime | None = None
 
 
@@ -125,9 +123,7 @@ async def list_users(db: AsyncSession = Depends(get_db)):
 
     out = []
     for user in users:
-        keys_result = await db.execute(
-            select(ApiKey).where(ApiKey.user_id == user.id)
-        )
+        keys_result = await db.execute(select(ApiKey).where(ApiKey.user_id == user.id))
         keys = keys_result.scalars().all()
         key_hashes = [k.key_hash for k in keys]
         stats = await _usage_stats(key_hashes, db)
@@ -154,7 +150,9 @@ async def create_user(body: UserCreate, db: AsyncSession = Depends(get_db)):
     db.add(user)
     await db.commit()
     log.info(f"Created user {user.email} ({user.id})")
-    return _user_dict(user, [], {"total_requests": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0})
+    return _user_dict(  # noqa: E501
+        user, [], {"total_requests": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
+    )
 
 
 @router.get("/{user_id}")
@@ -199,9 +197,7 @@ async def delete_user(user_id: str, db: AsyncSession = Depends(get_db)):
     """Deactivate a user and all their API keys."""
     user = await _get_user_or_404(user_id, db)
     user.is_active = False
-    await db.execute(
-        update(ApiKey).where(ApiKey.user_id == user.id).values(is_active=False)
-    )
+    await db.execute(update(ApiKey).where(ApiKey.user_id == user.id).values(is_active=False))
     await db.commit()
     log.info(f"Deactivated user {user.email}")
     return {"ok": True}
@@ -234,16 +230,18 @@ async def get_user_usage(user_id: str, db: AsyncSession = Depends(get_db)):
             .limit(20)
         )
         for rec in recent_result.scalars().all():
-            recent.append({
-                "provider": rec.provider,
-                "model": rec.model,
-                "prompt_tokens": rec.prompt_tokens,
-                "completion_tokens": rec.completion_tokens,
-                "cost_usd": float(rec.cost_usd or 0),
-                "latency_ms": rec.latency_ms,
-                "is_local": rec.is_local,
-                "created_at": rec.created_at.isoformat(),
-            })
+            recent.append(
+                {
+                    "provider": rec.provider,
+                    "model": rec.model,
+                    "prompt_tokens": rec.prompt_tokens,
+                    "completion_tokens": rec.completion_tokens,
+                    "cost_usd": float(rec.cost_usd or 0),
+                    "latency_ms": rec.latency_ms,
+                    "is_local": rec.is_local,
+                    "created_at": rec.created_at.isoformat(),
+                }
+            )
 
     return {
         "user_id": user_id,
@@ -288,7 +286,7 @@ async def create_api_key(user_id: str, body: KeyCreate, db: AsyncSession = Depen
     return {
         "key_id": str(api_key.id),
         "name": api_key.name,
-        "api_key": raw_key,   # ← show ONCE
+        "api_key": raw_key,  # ← show ONCE
         "key_prefix": f"sk-atlas-...{key_hash[-6:]}",
         "role": api_key.role,
         "rate_limit": api_key.rate_limit,

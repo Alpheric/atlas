@@ -15,7 +15,6 @@ Signals and weights:
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 
 from a1.common.logging import get_logger
@@ -134,7 +133,9 @@ async def score_and_store(
         async with async_session() as db:
             async with db.begin():
                 signal = QualitySignal(
-                    message_id=_uuid.UUID(message_id) if isinstance(message_id, str) else message_id,
+                    message_id=_uuid.UUID(message_id)
+                    if isinstance(message_id, str)
+                    else message_id,  # noqa: E501
                     signal_type="auto_eval",
                     value=score,
                     evaluator="heuristic_v1",

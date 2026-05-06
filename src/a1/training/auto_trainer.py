@@ -122,9 +122,9 @@ _DISTILL_MAX_INPUT = 2000  # chars — truncate long prompts for local
 # Prefer fastest available local models for distillation comparison
 # (Reflects actually-available Ollama models; remove unavailable models)
 _DISTILL_MODEL_PREFERENCE = [
-    "qwen2.5-coder:7b",    # best local code model (server 10.0.0.9)
-    "llama3.2:latest",     # fast general model (server 10.0.0.9)
-    "deepseek-coder:6.7b", # code fallback (server 10.0.0.9)
+    "qwen2.5-coder:7b",  # best local code model (server 10.0.0.9)
+    "llama3.2:latest",  # fast general model (server 10.0.0.9)
+    "deepseek-coder:6.7b",  # code fallback (server 10.0.0.9)
 ]
 
 
@@ -446,6 +446,7 @@ async def handle_dual_execution(
                 # Capture Vertex AI grounding if present
                 _grounding_meta = getattr(result, "grounding_metadata", None)
                 import json as _json_mod
+
                 await routing_repo.record(
                     message_id=assistant_msg.id,
                     provider=provider_name,
@@ -459,7 +460,9 @@ async def handle_dual_execution(
                     cost_usd=cost,
                     is_local=False,
                     web_search_grounded=bool(_grounding_meta),
-                    grounding_metadata=_json_mod.dumps(_grounding_meta) if _grounding_meta else None,
+                    grounding_metadata=_json_mod.dumps(_grounding_meta)
+                    if _grounding_meta
+                    else None,  # noqa: E501
                 )
     except Exception as e:
         log.warning(f"Failed to persist distillation conversation: {e}")

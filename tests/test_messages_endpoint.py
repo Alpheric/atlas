@@ -21,7 +21,6 @@ Test plan:
 """
 
 import json
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -69,7 +68,9 @@ async def _mock_stream_chunks(text: str = "Hello streamed!"):
         yield ChatCompletionChunk(
             id=chunk_id,
             model="test-model",
-            choices=[StreamChoice(delta=DeltaMessage(content=word + (" " if i < len(words) - 1 else "")))],
+            choices=[
+                StreamChoice(delta=DeltaMessage(content=word + (" " if i < len(words) - 1 else "")))
+            ],  # noqa: E501
         )
     # Final chunk with usage
     yield ChatCompletionChunk(
@@ -80,7 +81,9 @@ async def _mock_stream_chunks(text: str = "Hello streamed!"):
     )
 
 
-def _make_provider(text: str = "Hello from Atlas!", tool_calls=None, stream_text: str = "Hello streamed!"):
+def _make_provider(
+    text: str = "Hello from Atlas!", tool_calls=None, stream_text: str = "Hello streamed!"
+):  # noqa: E501
     provider = MagicMock()
     provider.name = "mock"
     provider.estimate_cost.return_value = 0.0
@@ -104,6 +107,7 @@ def _make_registry(provider):
 # ---------------------------------------------------------------------------
 # App fixture
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def client():
@@ -145,6 +149,7 @@ def client():
         mock_msg_settings.api_keys = [VALID_KEY]
 
         from a1.app import create_app
+
         app = create_app()
         with TestClient(app, raise_server_exceptions=False) as c:
             yield c
@@ -154,15 +159,16 @@ def client():
 # Helper: parse SSE stream from bytes
 # ---------------------------------------------------------------------------
 
+
 def _parse_sse(content: bytes) -> list[dict]:
     """Parse raw SSE bytes into list of {event, data} dicts."""
     events = []
     current: dict = {}
     for line in content.decode().splitlines():
         if line.startswith("event:"):
-            current["event"] = line[len("event:"):].strip()
+            current["event"] = line[len("event:") :].strip()
         elif line.startswith("data:"):
-            raw = line[len("data:"):].strip()
+            raw = line[len("data:") :].strip()
             try:
                 current["data"] = json.loads(raw)
             except json.JSONDecodeError:
@@ -178,6 +184,7 @@ def _parse_sse(content: bytes) -> list[dict]:
 # ---------------------------------------------------------------------------
 # A. Basic non-streaming roundtrip
 # ---------------------------------------------------------------------------
+
 
 class TestBasicRoundtrip:
     def test_non_streaming_200(self, client):
@@ -222,6 +229,7 @@ class TestBasicRoundtrip:
 # A'. Streaming roundtrip — full SSE event sequence
 # ---------------------------------------------------------------------------
 
+
 class TestStreamingRoundtrip:
     def test_streaming_200(self, client):
         resp = client.post(
@@ -254,11 +262,11 @@ class TestStreamingRoundtrip:
 
         # Required events must appear in order
         assert "message_start" in event_types, f"missing message_start; got {event_types}"
-        assert "content_block_start" in event_types, f"missing content_block_start"
-        assert "ping" in event_types, f"missing ping"
-        assert "content_block_stop" in event_types, f"missing content_block_stop"
-        assert "message_delta" in event_types, f"missing message_delta"
-        assert "message_stop" in event_types, f"missing message_stop"
+        assert "content_block_start" in event_types, "missing content_block_start"
+        assert "ping" in event_types, "missing ping"
+        assert "content_block_stop" in event_types, "missing content_block_stop"
+        assert "message_delta" in event_types, "missing message_delta"
+        assert "message_stop" in event_types, "missing message_stop"
 
         # Verify ordering
         def _idx(name):
@@ -270,8 +278,12 @@ class TestStreamingRoundtrip:
     def test_streaming_message_start_shape(self, client):
         resp = client.post(
             "/v1/messages",
-            json={"model": "atlas-plan", "max_tokens": 100, "stream": True,
-                  "messages": [{"role": "user", "content": "Hi"}]},
+            json={
+                "model": "atlas-plan",
+                "max_tokens": 100,
+                "stream": True,
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
             headers={"x-api-key": VALID_KEY},
         )
         events = _parse_sse(resp.content)
@@ -285,8 +297,12 @@ class TestStreamingRoundtrip:
     def test_streaming_message_delta_has_stop_reason(self, client):
         resp = client.post(
             "/v1/messages",
-            json={"model": "atlas-plan", "max_tokens": 100, "stream": True,
-                  "messages": [{"role": "user", "content": "Hi"}]},
+            json={
+                "model": "atlas-plan",
+                "max_tokens": 100,
+                "stream": True,
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
             headers={"x-api-key": VALID_KEY},
         )
         events = _parse_sse(resp.content)
@@ -296,8 +312,12 @@ class TestStreamingRoundtrip:
     def test_streaming_contains_text_deltas(self, client):
         resp = client.post(
             "/v1/messages",
-            json={"model": "atlas-plan", "max_tokens": 100, "stream": True,
-                  "messages": [{"role": "user", "content": "Hi"}]},
+            json={
+                "model": "atlas-plan",
+                "max_tokens": 100,
+                "stream": True,
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
             headers={"x-api-key": VALID_KEY},
         )
         events = _parse_sse(resp.content)
@@ -311,6 +331,7 @@ class TestStreamingRoundtrip:
 # ---------------------------------------------------------------------------
 # B. Tool definitions
 # ---------------------------------------------------------------------------
+
 
 class TestToolCalling:
     def test_tools_forwarded_no_crash(self, client):
@@ -358,6 +379,7 @@ class TestToolCalling:
 # ---------------------------------------------------------------------------
 # D. Multi-turn with tool_result content blocks
 # ---------------------------------------------------------------------------
+
 
 class TestToolResultBlocks:
     def test_tool_result_content_block_parsed(self, client):
@@ -431,12 +453,16 @@ class TestToolResultBlocks:
 # F. Edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestAuth:
     def test_x_api_key_accepted(self, client):
         resp = client.post(
             "/v1/messages",
-            json={"model": "atlas-plan", "max_tokens": 50,
-                  "messages": [{"role": "user", "content": "Hi"}]},
+            json={
+                "model": "atlas-plan",
+                "max_tokens": 50,
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
             headers={"x-api-key": VALID_KEY},
         )
         assert resp.status_code == 200
@@ -444,8 +470,11 @@ class TestAuth:
     def test_authorization_bearer_accepted(self, client):
         resp = client.post(
             "/v1/messages",
-            json={"model": "atlas-plan", "max_tokens": 50,
-                  "messages": [{"role": "user", "content": "Hi"}]},
+            json={
+                "model": "atlas-plan",
+                "max_tokens": 50,
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
             headers={"Authorization": f"Bearer {VALID_KEY}"},
         )
         assert resp.status_code == 200
@@ -453,8 +482,11 @@ class TestAuth:
     def test_missing_key_returns_401_anthropic_shape(self, client):
         resp = client.post(
             "/v1/messages",
-            json={"model": "atlas-plan", "max_tokens": 50,
-                  "messages": [{"role": "user", "content": "Hi"}]},
+            json={
+                "model": "atlas-plan",
+                "max_tokens": 50,
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
         )
         assert resp.status_code == 401
         body = resp.json()
@@ -465,8 +497,11 @@ class TestAuth:
     def test_bad_key_returns_403_anthropic_shape(self, client):
         resp = client.post(
             "/v1/messages",
-            json={"model": "atlas-plan", "max_tokens": 50,
-                  "messages": [{"role": "user", "content": "Hi"}]},
+            json={
+                "model": "atlas-plan",
+                "max_tokens": 50,
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
             headers={"x-api-key": BAD_KEY},
         )
         assert resp.status_code == 403
@@ -508,13 +543,16 @@ class TestSystemField:
 
 
 class TestToolChoice:
-    @pytest.mark.parametrize("tool_choice", [
-        "auto",
-        "any",
-        {"type": "auto"},
-        {"type": "any"},
-        {"type": "tool", "name": "list_files"},
-    ])
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [
+            "auto",
+            "any",
+            {"type": "auto"},
+            {"type": "any"},
+            {"type": "tool", "name": "list_files"},
+        ],
+    )
     def test_tool_choice_variants(self, client, tool_choice):
         resp = client.post(
             "/v1/messages",
@@ -552,14 +590,17 @@ class TestStopSequences:
 
 
 class TestModelAliases:
-    @pytest.mark.parametrize("model", [
-        "Atlas",
-        "atlas",
-        "atlas-plan",
-        "atlas-code",
-        "claude-3-5-sonnet-20241022",  # common Anthropic model name — should route gracefully
-        "claude-opus-4-20250514",
-    ])
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "Atlas",
+            "atlas",
+            "atlas-plan",
+            "atlas-code",
+            "claude-3-5-sonnet-20241022",  # common Anthropic model name — should route gracefully
+            "claude-opus-4-20250514",
+        ],
+    )
     def test_model_aliases_no_crash(self, client, model):
         resp = client.post(
             "/v1/messages",
@@ -598,8 +639,11 @@ class TestValidation:
         """anthropic-version header must not cause 4xx."""
         resp = client.post(
             "/v1/messages",
-            json={"model": "atlas-plan", "max_tokens": 50,
-                  "messages": [{"role": "user", "content": "Hi"}]},
+            json={
+                "model": "atlas-plan",
+                "max_tokens": 50,
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
             headers={
                 "x-api-key": VALID_KEY,
                 "anthropic-version": "2023-06-01",
@@ -613,20 +657,26 @@ class TestValidation:
 # Integration: smoke test with live backend (skipped if not running)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 class TestLiveBackend:
     """Run these with: pytest -m integration tests/test_messages_endpoint.py
     Requires: backend running on localhost:8001
     """
+
     BASE = "http://localhost:8001"
     KEY = "sk-atlas-FwcHfmI5qWzbohi2prMoixYBHAxEoxKEtN4qK2K9i38"
 
     def test_live_non_streaming(self):
         import httpx
+
         resp = httpx.post(
             f"{self.BASE}/v1/messages",
-            json={"model": "Atlas", "max_tokens": 50,
-                  "messages": [{"role": "user", "content": "What is 2+2? Answer in one word."}]},
+            json={
+                "model": "Atlas",
+                "max_tokens": 50,
+                "messages": [{"role": "user", "content": "What is 2+2? Answer in one word."}],
+            },
             headers={"x-api-key": self.KEY},
             timeout=30,
         )
@@ -639,12 +689,17 @@ class TestLiveBackend:
 
     def test_live_streaming(self):
         import httpx
+
         events = []
         with httpx.stream(
             "POST",
             f"{self.BASE}/v1/messages",
-            json={"model": "Atlas", "max_tokens": 80, "stream": True,
-                  "messages": [{"role": "user", "content": "Say hello in exactly 5 words."}]},
+            json={
+                "model": "Atlas",
+                "max_tokens": 80,
+                "stream": True,
+                "messages": [{"role": "user", "content": "Say hello in exactly 5 words."}],
+            },
             headers={"x-api-key": self.KEY},
             timeout=60,
         ) as resp:
@@ -652,10 +707,10 @@ class TestLiveBackend:
             current: dict = {}
             for line in resp.iter_lines():
                 if line.startswith("event:"):
-                    current["event"] = line[len("event:"):].strip()
+                    current["event"] = line[len("event:") :].strip()
                 elif line.startswith("data:"):
                     try:
-                        current["data"] = json.loads(line[len("data:"):].strip())
+                        current["data"] = json.loads(line[len("data:") :].strip())
                     except Exception:
                         pass
                 elif line == "" and current:
@@ -671,6 +726,7 @@ class TestLiveBackend:
     def test_live_tool_result_multiturn(self):
         """Multi-turn conversation with tool_result block."""
         import httpx
+
         resp = httpx.post(
             f"{self.BASE}/v1/messages",
             json={
