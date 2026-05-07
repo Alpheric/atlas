@@ -142,9 +142,7 @@ async def animate_image(
     """Animate a base image into video using Veo image-to-video."""
     from a1.providers.veo import veo_provider
 
-    log.info(
-        f"[veo] POST /v1/video/animate model={req.model} image={req.image_url[:60]!r}"
-    )
+    log.info(f"[veo] POST /v1/video/animate model={req.model} image={req.image_url[:60]!r}")
 
     try:
         result = await veo_provider.image_to_video(

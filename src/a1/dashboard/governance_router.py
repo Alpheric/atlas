@@ -426,22 +426,25 @@ async def set_budget(body: dict, db: AsyncSession = Depends(get_db)):
 # Compliance Summary
 # ---------------------------------------------------------------------------
 
+
 @router.get("/governance/compliance")
 async def compliance_summary(db: AsyncSession = Depends(get_db)):
     """Return a compliance summary: approval stats, audit coverage, model governance."""
     from sqlalchemy import func, select
+
     from a1.db.models import ApprovalRequest, AuditEvent, ModelVersion
 
     # Approval stats
     approval_result = await db.execute(
-        select(ApprovalRequest.status, func.count().label("count"))
-        .group_by(ApprovalRequest.status)
+        select(ApprovalRequest.status, func.count().label("count")).group_by(ApprovalRequest.status)
     )
     approval_counts = {row.status: row.count for row in approval_result}
 
     # Audit event count (last 30 days)
-    from a1.common.tz import now_ist
     import datetime
+
+    from a1.common.tz import now_ist
+
     since = now_ist() - datetime.timedelta(days=30)
     audit_result = await db.execute(
         select(func.count()).select_from(AuditEvent).where(AuditEvent.created_at >= since)
@@ -450,8 +453,7 @@ async def compliance_summary(db: AsyncSession = Depends(get_db)):
 
     # Model version status breakdown
     mv_result = await db.execute(
-        select(ModelVersion.status, func.count().label("count"))
-        .group_by(ModelVersion.status)
+        select(ModelVersion.status, func.count().label("count")).group_by(ModelVersion.status)
     )
     mv_counts = {row.status: row.count for row in mv_result}
 
@@ -463,7 +465,7 @@ async def compliance_summary(db: AsyncSession = Depends(get_db)):
         },
         "audit_events_last_30d": audit_count,
         "model_versions": mv_counts,
-        "compliance_score": 100 if approval_counts.get("pending", 0) == 0 else max(
-            0, 100 - approval_counts.get("pending", 0) * 10
-        ),
+        "compliance_score": 100
+        if approval_counts.get("pending", 0) == 0
+        else max(0, 100 - approval_counts.get("pending", 0) * 10),
     }

@@ -57,7 +57,11 @@ function HealthBadge({ score, flags }: { score: number | null | undefined; flags
 
 const SOURCE_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   proxy: { label: 'Proxy', color: 'blue', icon: <ThunderboltOutlined /> },
+  openai: { label: 'OpenAI', color: 'blue', icon: <ThunderboltOutlined /> },
+  atlas: { label: 'Atlas', color: 'green', icon: <RocketOutlined /> },
+  api: { label: 'API', color: 'blue', icon: <ThunderboltOutlined /> },
   onedesk: { label: 'OneDesk', color: 'geekblue', icon: <CloudServerOutlined /> },
+  responses: { label: 'Responses', color: 'cyan', icon: <CloudServerOutlined /> },
   'import:paperclip': { label: 'Paperclip', color: 'purple', icon: <DatabaseOutlined /> },
   'import:openai_jsonl': { label: 'JSONL', color: 'orange', icon: <DatabaseOutlined /> },
   openclaw: { label: 'OpenClaw', color: 'cyan', icon: <CloudServerOutlined /> },
@@ -78,6 +82,7 @@ export default function Conversations() {
   const [search, setSearch] = useState('');
   const [dateRange, setDateRange] = useState<[string | null, string | null]>([null, null]);
   const [sourceFilter, setSourceFilter] = useState<string | undefined>(undefined);
+  const [dynamicSources, setDynamicSources] = useState<string[]>([]);
   const [view, setView] = useState<'conversations' | 'sessions'>('conversations');
   const navigate = useNavigate();
 
@@ -103,12 +108,16 @@ export default function Conversations() {
       getConversationHealth(200).catch(() => ({ data: [] })),
     ])
       .then(([res, st, dist, sess, health]) => {
-        setData(res.data || []);
+        const rows = res.data || [];
+        setData(rows);
         setTotal(res.total || 0);
         setStats(st);
         setDistillation(dist);
         setSessions(sess.data || []);
         setHealthData(health.data || []);
+        // Collect any source values not already in SOURCE_CONFIG
+        const seen = new Set<string>(rows.map((r: any) => r.source).filter(Boolean));
+        setDynamicSources(Array.from(seen));
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -129,6 +138,13 @@ export default function Conversations() {
       load(page, pageSize);
     }
   }, [page, pageSize, search, dateRange, sourceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-refresh every 30 seconds when on conversations tab
+  useEffect(() => {
+    if (view !== 'conversations') return;
+    const timer = setInterval(() => load(page, pageSize), 30_000);
+    return () => clearInterval(timer);
+  }, [page, pageSize, search, dateRange, sourceFilter, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchAllForExport = async () => {
     const res = await getConversations({ ...buildQueryParams(1, 10000) });
@@ -163,7 +179,7 @@ export default function Conversations() {
 
   const columns: ColumnsType<any> = [
     {
-      title: 'ID', dataIndex: 'id', width: 90,
+      title: 'ID', dataIndex: 'id', width: 80,
       render: (id: string) => (
         <a onClick={() => navigate(`/conversations/${id}`)} style={{ fontFamily: 'monospace', fontSize: 11 }}>
           {id.slice(0, 8)}
@@ -171,17 +187,23 @@ export default function Conversations() {
       ),
     },
     {
-      title: 'Source', dataIndex: 'source', width: 120,
+      title: 'Source', dataIndex: 'source', width: 105,
       render: (s: string) => {
         const cfg = SOURCE_CONFIG[s] || { label: s, color: 'default', icon: <BranchesOutlined /> };
         return <Tag icon={cfg.icon} color={cfg.color} style={{ fontSize: 10 }}>{cfg.label}</Tag>;
       },
     },
     {
-      title: 'User', dataIndex: 'user_id', width: 130,
-      render: (u: string | null) => u ? (
-        <Space size={4}><UserOutlined style={{ fontSize: 10, color: '#6b7280' }} /><span style={{ fontSize: 11 }}>{u}</span></Space>
-      ) : <span style={{ color: '#4b5563', fontSize: 11 }}>anonymous</span>,
+      title: 'Preview', dataIndex: 'preview', ellipsis: true,
+      render: (p: string | null, row: any) => p ? (
+        <Tooltip title={p}>
+          <span style={{ fontSize: 11, color: '#d1d5db' }}>{p}</span>
+        </Tooltip>
+      ) : (
+        <span style={{ color: '#4b5563', fontSize: 11 }}>
+          {row.user_id ? <><UserOutlined style={{ fontSize: 10 }} /> {row.user_id}</> : '— no preview —'}
+        </span>
+      ),
     },
     {
       title: 'Turns', dataIndex: 'message_count', width: 70,
@@ -456,8 +478,8 @@ export default function Conversations() {
                       >
                         <Tag icon={cfg.icon} color={cfg.color} style={{ fontSize: 10, margin: 0, flexShrink: 0 }}>{cfg.label}</Tag>
                         <span style={{ fontSize: 11, color: '#9ca3af', fontFamily: 'monospace', flexShrink: 0 }}>{c.id.slice(0, 8)}</span>
-                        <span style={{ fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {c.user_id || <span style={{ color: '#4b5563' }}>anonymous</span>}
+                        <span style={{ fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: c.preview ? '#d1d5db' : '#4b5563' }}>
+                          {c.preview || c.user_id || 'anonymous'}
                         </span>
                         {c.model && (
                           <Tag color="purple" style={{ fontSize: 9, margin: 0, flexShrink: 0 }}>
@@ -495,7 +517,13 @@ export default function Conversations() {
           style={{ width: 150 }}
           value={sourceFilter}
           onChange={setSourceFilter}
-          options={Object.entries(SOURCE_CONFIG).map(([k, v]) => ({ value: k, label: v.label }))}
+          options={Array.from(new Set([
+            ...Object.keys(SOURCE_CONFIG),
+            ...dynamicSources,
+          ])).map((k) => {
+            const cfg = SOURCE_CONFIG[k];
+            return { value: k, label: cfg ? cfg.label : k };
+          })}
         />
         <DateRangeFilter value={dateRange} onChange={setDateRange} />
       </Space>

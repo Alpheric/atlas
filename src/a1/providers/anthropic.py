@@ -21,7 +21,11 @@ class AnthropicProvider(LLMProvider):
     name = "anthropic"
 
     def __init__(self):
-        self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        kwargs: dict = {"api_key": settings.anthropic_api_key}
+        base_url = settings.provider_base_url("anthropic")
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = anthropic.AsyncAnthropic(**kwargs)
         self._models = [
             ModelInfo("claude-sonnet-4-20250514", "anthropic", 200000, 0.003, 0.015, True, True),
             ModelInfo("claude-haiku-4-5-20251001", "anthropic", 200000, 0.001, 0.005, True, True),

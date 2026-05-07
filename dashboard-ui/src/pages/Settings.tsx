@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Typography, Card, Form, Input, InputNumber, Select, Slider, Button, Space, App } from 'antd';
 import { KeyOutlined, BranchesOutlined, ExperimentOutlined, SaveOutlined } from '@ant-design/icons';
 import { getSettings, saveSettings } from '../lib/api';
-import PageSkeleton from '../components/shared/PageSkeleton';
 
 export default function SettingsPage() {
   const [form] = Form.useForm();

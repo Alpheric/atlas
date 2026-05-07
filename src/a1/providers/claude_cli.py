@@ -112,6 +112,14 @@ class ClaudeCLIProvider(LLMProvider):
         """Return full command list for the CLI. Subclasses can prepend sudo etc."""
         return [self._cli_path] + args
 
+    def _effective_home(self) -> str | None:
+        """Return HOME override for subprocess env, or None to use process default.
+
+        Overridden by ClaudeCLIAccount to use a minimal HOME directory that
+        contains only credentials — no plugins or MCP server configs.
+        """
+        return None
+
     @staticmethod
     def _find_claude_cli(home_dir: str | None = None) -> str:
         """Find the claude CLI executable path.
@@ -271,6 +279,9 @@ class ClaudeCLIProvider(LLMProvider):
             "--tools",
             "",  # disable all built-in tools so Claude responds with text only
             "--no-session-persistence",  # don't save/load sessions from disk
+            "--mcp-config", '{"mcpServers":{}}',  # clear local MCP server config
+            "--disallowedTools",          # block account-level remote MCP tools
+            "mcp__claude_ai_Google_Drive__authenticate,mcp__claude_ai_Google_Drive__complete_authentication",
         ]
 
         # Build the --system-prompt value.
@@ -659,10 +670,12 @@ class ClaudeCLIProvider(LLMProvider):
         import os
         import sys
 
+        home_override = self._effective_home()
         env = {
             **os.environ,
             "PYTHONIOENCODING": "utf-8",
             "LANG": "en_US.UTF-8",
+            **({"HOME": home_override} if home_override else {}),
         }
 
         cli = self._cli_path
@@ -681,6 +694,9 @@ class ClaudeCLIProvider(LLMProvider):
             "--tools",
             "",  # disable all built-in tools
             "--no-session-persistence",
+            "--mcp-config", '{"mcpServers":{}}',  # clear local MCP server config
+            "--disallowedTools",          # block account-level remote MCP tools
+            "mcp__claude_ai_Google_Drive__authenticate,mcp__claude_ai_Google_Drive__complete_authentication",
             "--system-prompt",
             atlas_identity,
         ]
@@ -882,6 +898,26 @@ class ClaudeCLIAccount(ClaudeCLIProvider):
         except KeyError:
             return os.path.expanduser(f"~{self.unix_user}")
 
+    def _effective_home(self) -> str | None:
+        """Use minimal HOME when available, otherwise fall back to real home."""
+        return self._minimal_home_dir() or self._home_dir()
+
+    def _minimal_home_dir(self) -> str | None:
+        """Return path to minimal HOME (credentials only, no plugins/MCP).
+
+        When present, running claude with HOME set to this directory prevents
+        MCP servers configured in the user's real ~/.claude/remote/plugins/
+        from being loaded, so Claude only sees tools described in the system
+        prompt.
+        """
+        import os
+
+        minimal = os.path.join(
+            os.path.dirname(__file__), "..", "..", "..", ".claude-minimal", self.unix_user
+        )
+        minimal = os.path.normpath(minimal)
+        return minimal if os.path.isdir(minimal) else None
+
     async def _exec(
         self,
         args: list[str],
@@ -897,7 +933,10 @@ class ClaudeCLIAccount(ClaudeCLIProvider):
             **os.environ,
             "PYTHONIOENCODING": "utf-8",
             "LANG": "en_US.UTF-8",
-            "HOME": self._home_dir(),
+            # Use minimal HOME (credentials only, no plugins) when available.
+            # This prevents MCP servers in ~/.claude/remote/plugins/ from being
+            # loaded and injecting unwanted tools into Claude's context.
+            "HOME": self._minimal_home_dir() or self._home_dir(),
         }
 
         stdin_pipe = asyncio.subprocess.PIPE if stdin_data else None

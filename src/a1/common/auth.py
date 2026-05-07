@@ -153,29 +153,59 @@ async def _enforce_rate_limit(key_hash: str, rate_limit: int) -> None:
 
 
 async def _verify_key_in_db(key_hash: str) -> bool:
-    """Check if a key hash exists and is active in the api_keys table."""
+    """Check if a key hash exists and is active in api_keys OR atlas_api_keys.
+
+    api_keys       — dashboard/internal keys created via the UI
+    atlas_api_keys — OneDesk tenant keys created via the provisioning API
+    Both tables are valid; either table match authenticates the request.
+    """
     try:
         async with async_session() as session:
+            # 1. Dashboard api_keys table
             result = await session.execute(
                 select(ApiKey.id).where(ApiKey.key_hash == key_hash, ApiKey.is_active.is_(True))
             )
-            return result.first() is not None
+            if result.first() is not None:
+                return True
+
+            # 2. OneDesk tenant keys (atlas_api_keys)
+            from a1.db.models import AtlasApiKey
+            result2 = await session.execute(
+                select(AtlasApiKey.id).where(
+                    AtlasApiKey.key_hash == key_hash,
+                    AtlasApiKey.status == "active",
+                )
+            )
+            return result2.first() is not None
     except Exception as e:
         log.debug(f"DB key check failed: {e}")
         return False
 
 
 async def _update_key_last_used(key_hash: str) -> None:
-    """Update last_used_at timestamp on the api_key record."""
+    """Update last_used_at timestamp on the matching key record (either table)."""
     try:
         from sqlalchemy import update as sa_update
+
         from a1.common.tz import now_ist
+        from a1.db.models import AtlasApiKey
+
         async with async_session() as session:
             async with session.begin():
+                # Update api_keys
                 await session.execute(
                     sa_update(ApiKey)
                     .where(ApiKey.key_hash == key_hash)
                     .values(last_used_at=now_ist())
+                )
+                # Also update atlas_api_keys (OneDesk tenant keys)
+                await session.execute(
+                    sa_update(AtlasApiKey)
+                    .where(AtlasApiKey.key_hash == key_hash)
+                    .values(
+                        last_used_at=now_ist(),
+                        requests_total=AtlasApiKey.requests_total + 1,
+                    )
                 )
     except Exception:
         pass  # non-critical
@@ -186,9 +216,11 @@ async def verify_api_key(
 ) -> str:
     """Verify API key from Bearer token and enforce rate limits. Returns the raw key.
 
-    Accepts keys from two sources (in priority order):
+    Accepts keys from these sources (in priority order):
       1. settings.api_keys — env-var master keys (admin access, always accepted)
-      2. api_keys DB table — per-user keys created via the dashboard
+      2. settings.alpheric_ai_platform_api_key — OneDesk platform master key
+      3. atlas_api_keys DB table — OneDesk tenant keys (created via provisioning API)
+      4. api_keys DB table — per-user keys created via the dashboard
     """
     if not settings.api_keys:
         return "dev"
@@ -199,13 +231,26 @@ async def verify_api_key(
     key = credentials.credentials
     key_h = hash_key(key)
 
-    if key not in settings.api_keys:
-        # Not a master key — check DB for a user-created key
-        if not await _verify_key_in_db(key_h):
-            raise HTTPException(status_code=403, detail="Invalid API key")
-        # Valid DB key — update last_used timestamp in background
-        import asyncio
-        asyncio.create_task(_update_key_last_used(key_h))
+    # 1. Env-var master keys (admin)
+    if key in settings.api_keys:
+        _, _, rate_limit = await _resolve_key_info(key_h)
+        await _enforce_rate_limit(key_h, rate_limit)
+        return key
+
+    # 2. OneDesk platform master key
+    if settings.alpheric_ai_platform_api_key and key == settings.alpheric_ai_platform_api_key:
+        _, _, rate_limit = await _resolve_key_info(key_h)
+        await _enforce_rate_limit(key_h, rate_limit)
+        return key
+
+    # 3 & 4. DB keys (atlas_api_keys tenant keys + api_keys dashboard keys)
+    if not await _verify_key_in_db(key_h):
+        raise HTTPException(status_code=403, detail="Invalid API key")
+
+    # Valid DB key — update last_used timestamp in background
+    import asyncio
+
+    asyncio.create_task(_update_key_last_used(key_h))
 
     _, _, rate_limit = await _resolve_key_info(key_h)
     await _enforce_rate_limit(key_h, rate_limit)

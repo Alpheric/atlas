@@ -74,6 +74,19 @@ class LiteLLMProvider(LLMProvider):
             return f"{self._prefix}{model}"
         return model
 
+    # X-Stainless-* headers are injected by the OpenAI SDK's Stainless-generated
+    # client code on every request. They carry no functional value and trigger
+    # Cloudflare WAF inspection, adding latency. Setting them to empty strings
+    # suppresses them at the HTTP layer. Only applied for OpenAI-compatible endpoints.
+    _STAINLESS_SUPPRESS = {
+        "X-Stainless-Lang": "",
+        "X-Stainless-Package-Version": "",
+        "X-Stainless-Runtime": "",
+        "X-Stainless-Runtime-Version": "",
+        "X-Stainless-Arch": "",
+        "X-Stainless-OS": "",
+    }
+
     def _build_kwargs(self, request: ChatCompletionRequest) -> dict:
         """Build kwargs for litellm.acompletion()."""
         messages = [{"role": m.role, "content": m.content or ""} for m in request.messages]
@@ -87,6 +100,10 @@ class LiteLLMProvider(LLMProvider):
             kwargs["api_key"] = self._api_key
         if self._api_base:
             kwargs["api_base"] = self._api_base
+
+        # Strip X-Stainless-* telemetry headers for OpenAI (and OpenAI-compatible) endpoints
+        if self.name in ("openai", "groq", "moonshot", "deepseek", "fireworks", "together"):
+            kwargs["extra_headers"] = self._STAINLESS_SUPPRESS
 
         if request.max_tokens is not None:
             kwargs["max_tokens"] = request.max_tokens

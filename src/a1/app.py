@@ -164,6 +164,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize web search providers (no-op if no API keys configured)
     from a1.search.providers.registry import init_search_providers
+
     init_search_providers()
 
     # Start conversation health monitor (background task, fire-and-forget)
@@ -244,6 +245,34 @@ def create_app() -> FastAPI:
     from a1.mcp.server import mcp as _mcp
 
     app.mount("/mcp", _mcp.sse_app())
+
+    # Atlas CLI installer — serve install scripts + pre-built bundle
+    # install.sh  → curl -fsSL https://atlas.alpheric.ai/install.sh | bash
+    # install.ps1 → irm https://atlas.alpheric.ai/install.ps1 | iex
+    import pathlib as _pathlib
+
+    from fastapi.responses import FileResponse as _FileResponse
+    from fastapi.staticfiles import StaticFiles as _StaticFiles
+
+    _downloads_dir = _pathlib.Path(__file__).parent.parent.parent / "public" / "downloads"
+    if _downloads_dir.exists():
+        app.mount("/downloads", _StaticFiles(directory=str(_downloads_dir)), name="downloads")
+
+        @app.get("/install.sh", include_in_schema=False)
+        async def install_sh():
+            return _FileResponse(
+                str(_downloads_dir / "install.sh"),
+                media_type="text/plain",
+                headers={"Content-Disposition": "inline"},
+            )
+
+        @app.get("/install.ps1", include_in_schema=False)
+        async def install_ps1():
+            return _FileResponse(
+                str(_downloads_dir / "install.ps1"),
+                media_type="text/plain",
+                headers={"Content-Disposition": "inline"},
+            )
 
     # Request ID + logging middleware
     import uuid as _uuid

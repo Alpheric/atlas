@@ -19,7 +19,7 @@ Flags written to the flags JSON column:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from a1.common.logging import get_logger
 
@@ -57,7 +57,7 @@ async def _score_conversation(conv, db) -> dict:
     """Compute health score and flags for a single Conversation object."""
     from sqlalchemy import func, select
 
-    from a1.db.models import Message, QualitySignal, RoutingDecision
+    from a1.db.models import QualitySignal
 
     msgs = sorted(conv.messages or [], key=lambda m: m.sequence)
     user_msgs = [m.content for m in msgs if m.role == "user"]
@@ -82,8 +82,7 @@ async def _score_conversation(conv, db) -> dict:
     avg_quality: float = 0.5  # neutral default when no signals yet
     if asst_ids:
         row = await db.execute(
-            select(func.avg(QualitySignal.value))
-            .where(
+            select(func.avg(QualitySignal.value)).where(
                 QualitySignal.message_id.in_(asst_ids),
                 QualitySignal.signal_type == "auto_eval",
             )
@@ -125,8 +124,6 @@ async def _score_conversation(conv, db) -> dict:
 
 async def _scan_recent_conversations() -> None:
     """Scan conversations from the last 24h and upsert health rows."""
-    import uuid as _uuid
-    from datetime import timezone as _tz
 
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
@@ -142,10 +139,8 @@ async def _scan_recent_conversations() -> None:
         result = await db.execute(
             select(Conversation)
             .options(
-                selectinload(Conversation.messages)
-                .selectinload(Message.routing_decision),
-                selectinload(Conversation.messages)
-                .selectinload(Message.quality_signals),
+                selectinload(Conversation.messages).selectinload(Message.routing_decision),
+                selectinload(Conversation.messages).selectinload(Message.quality_signals),
             )
             .where(Conversation.updated_at >= cutoff)
         )
@@ -159,9 +154,7 @@ async def _scan_recent_conversations() -> None:
 
                 # Upsert conversation_health
                 existing = await db.execute(
-                    select(ConversationHealth).where(
-                        ConversationHealth.conversation_id == conv.id
-                    )
+                    select(ConversationHealth).where(ConversationHealth.conversation_id == conv.id)
                 )
                 health_row = existing.scalar_one_or_none()
 
@@ -200,9 +193,7 @@ async def run_health_monitor() -> None:
     """Continuous background loop — scans conversations every interval seconds."""
     from config.settings import settings
 
-    log.info(
-        f"[health-monitor] Started (interval={settings.health_monitor_interval_seconds}s)"
-    )
+    log.info(f"[health-monitor] Started (interval={settings.health_monitor_interval_seconds}s)")
     while True:
         try:
             await _scan_recent_conversations()

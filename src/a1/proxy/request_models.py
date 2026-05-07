@@ -52,10 +52,7 @@ class MessageInput(BaseModel):
 
         # Preserve raw parts when content list contains images
         if isinstance(content, list) and "content_parts" not in values:
-            has_image = any(
-                isinstance(i, dict) and i.get("type") == "image_url"
-                for i in content
-            )
+            has_image = any(isinstance(i, dict) and i.get("type") == "image_url" for i in content)
             if has_image:
                 values = dict(values)
                 values["content_parts"] = content

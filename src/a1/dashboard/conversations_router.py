@@ -66,12 +66,22 @@ async def list_conversations(
         for h in health_rows.scalars().all():
             health_map[h.conversation_id] = h
 
+    def _preview(conv) -> str | None:
+        """Return first non-empty user message (truncated to 120 chars)."""
+        for m in sorted(conv.messages or [], key=lambda x: x.sequence):
+            if m.role == "user" and m.content:
+                text = m.content.strip()
+                if text and not text.startswith("[Tool result"):
+                    return text[:120] + ("…" if len(text) > 120 else "")
+        return None
+
     return {
         "data": [
             {
                 "id": str(c.id),
                 "source": c.source,
                 "user_id": c.user_id,
+                "preview": _preview(c),
                 "message_count": sum(
                     1 for m in (c.messages or []) if m.role in ("user", "assistant")
                 ),

@@ -21,7 +21,24 @@ class OpenAIProvider(LLMProvider):
     name = "openai"
 
     def __init__(self):
-        self.client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+        # Strip X-Stainless-* telemetry headers that the OpenAI SDK injects by default.
+        # These headers add overhead through Cloudflare WAF inspection and are not
+        # needed for API functionality.
+        client_kwargs: dict = {
+            "api_key": settings.openai_api_key,
+            "default_headers": {
+                "X-Stainless-Lang": "",
+                "X-Stainless-Package-Version": "",
+                "X-Stainless-Runtime": "",
+                "X-Stainless-Runtime-Version": "",
+                "X-Stainless-Arch": "",
+                "X-Stainless-OS": "",
+            },
+        }
+        base_url = settings.provider_base_url("openai")
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self.client = openai.AsyncOpenAI(**client_kwargs)
         self._models = [
             ModelInfo("gpt-4o", "openai", 128000, 0.005, 0.015, True, True),
             ModelInfo("gpt-4o-mini", "openai", 128000, 0.00015, 0.0006, True, True),

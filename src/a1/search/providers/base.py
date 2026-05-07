@@ -14,10 +14,10 @@ class SearchResult(TypedDict):
 
     title: str
     url: str
-    snippet: str           # 1-3 sentence excerpt from the page
-    published_date: str    # ISO 8601 or empty string
-    source: str            # domain name, e.g. "docs.python.org"
-    rank: int              # 1-based position in result list
+    snippet: str  # 1-3 sentence excerpt from the page
+    published_date: str  # ISO 8601 or empty string
+    source: str  # domain name, e.g. "docs.python.org"
+    rank: int  # 1-based position in result list
 
 
 class SearchProvider(ABC):

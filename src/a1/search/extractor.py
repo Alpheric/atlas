@@ -30,9 +30,7 @@ _FETCH_TIMEOUT = 6.0
 _MAX_CONCURRENT = 3
 
 _HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (compatible; AtlasBot/1.0; +https://alpheric.com)"
-    ),
+    "User-Agent": ("Mozilla/5.0 (compatible; AtlasBot/1.0; +https://alpheric.com)"),
     "Accept": "text/html,application/xhtml+xml",
     "Accept-Language": "en-US,en;q=0.9",
 }
@@ -105,6 +103,7 @@ async def extract_pages(
 
     async def _fetch_one(result: SearchResult) -> ExtractedPage:
         import urllib.parse
+
         domain = urllib.parse.urlparse(result["url"]).netloc.lstrip("www.")
         # Skip extraction for known blocked/JS-heavy domains
         if any(domain.endswith(b) for b in _BLOCKED_DOMAINS):
@@ -187,8 +186,12 @@ def _parse_html(raw: str) -> tuple[str, str, str]:
             break
 
     # Remove non-content elements
-    raw = re.sub(r"<(script|style|nav|header|footer|aside|form|noscript)[^>]*>.*?</\1>",
-                 "", raw, flags=re.DOTALL | re.IGNORECASE)
+    raw = re.sub(
+        r"<(script|style|nav|header|footer|aside|form|noscript)[^>]*>.*?</\1>",
+        "",
+        raw,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     # Remove all remaining tags
     raw = re.sub(r"<[^>]+>", " ", raw)
     text = _clean_text(raw)

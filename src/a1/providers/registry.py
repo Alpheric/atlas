@@ -177,6 +177,7 @@ class ProviderRegistry:
                 name="openai",
                 models=models,
                 api_key=settings.openai_api_key,
+                api_base=settings.provider_base_url("openai"),
             )
             log.info(f"Registered OpenAI via LiteLLM ({len(models)} models)")
 
@@ -193,6 +194,7 @@ class ProviderRegistry:
                 name="groq",
                 models=models,
                 api_key=settings.groq_api_key,
+                api_base=settings.provider_base_url("groq"),
             )
             log.info(f"Registered Groq via LiteLLM ({len(models)} models)")
 

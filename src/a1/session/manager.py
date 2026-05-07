@@ -46,11 +46,11 @@ class Session:
 
     # ── Routing stickiness state ───────────────────────────────────────────
     # Persisted across turns so the pipeline can re-use the same model.
-    primary_model: str | None = None       # e.g. "atlas-plan" or "claude-sonnet-4-20250514"
-    primary_provider: str | None = None    # e.g. "claude-cli" or "vertex"
-    primary_task_type: str | None = None   # e.g. "planning", "coding"
-    routing_mode: str = "balanced"         # quality / balanced / low_cost / local_first
-    fallback_count: int = 0                # how many times we've fallen back this session
+    primary_model: str | None = None  # e.g. "atlas-plan" or "claude-sonnet-4-20250514"
+    primary_provider: str | None = None  # e.g. "claude-cli" or "vertex"
+    primary_task_type: str | None = None  # e.g. "planning", "coding"
+    routing_mode: str = "balanced"  # quality / balanced / low_cost / local_first
+    fallback_count: int = 0  # how many times we've fallen back this session
 
     def set_routing(self, model: str, provider: str, task_type: str) -> None:
         """Record the primary model chosen this turn (called after first successful response)."""

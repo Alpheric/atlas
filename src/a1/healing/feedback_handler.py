@@ -54,8 +54,7 @@ async def handle_thumbs_down(
     from sqlalchemy.orm import selectinload
 
     from a1.db.engine import async_session
-    from a1.db.models import Message, QualitySignal, RoutingDecision
-    from a1.db.repositories import MessageRepo
+    from a1.db.models import Message, QualitySignal
     from a1.providers.registry import provider_registry
     from a1.proxy.request_models import ChatCompletionRequest
     from config.settings import settings

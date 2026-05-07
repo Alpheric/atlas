@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Atlas CLI Installer — Windows (PowerShell)
+#
+# Usage (run in PowerShell as normal user):
+#   irm https://atlas.alpheric.ai/install.ps1 | iex
+#
+# What this does:
+#   1. Installs Bun for Windows (if not already installed)
+#   2. Downloads the Atlas CLI bundle to %USERPROFILE%\.atlas-cli\
+#   3. Creates atlas.cmd in %USERPROFILE%\.atlas-cli\bin\ and adds to PATH
+# ─────────────────────────────────────────────────────────────────────────────
+
+$ErrorActionPreference = "Stop"
+$BASE_URL   = "https://atlas.alpheric.ai"
+$INSTALL_DIR = Join-Path $env:USERPROFILE ".atlas-cli"
+$BIN_DIR     = Join-Path $INSTALL_DIR "bin"
+
+Write-Host ""
+Write-Host "  ╭────────────────────────────────────────────────╮" -ForegroundColor DarkGray
+Write-Host "  │                                                │" -ForegroundColor DarkGray
+Write-Host "  │  " -NoNewline -ForegroundColor DarkGray; Write-Host " ██████╗ ████████╗██╗      █████╗ ███████╗ " -NoNewline -ForegroundColor Green;  Write-Host " │" -ForegroundColor DarkGray
+Write-Host "  │  " -NoNewline -ForegroundColor DarkGray; Write-Host "██╔══██╗╚══██╔══╝██║     ██╔══██╗██╔════╝ " -NoNewline -ForegroundColor Green;  Write-Host " │" -ForegroundColor DarkGray
+Write-Host "  │  " -NoNewline -ForegroundColor DarkGray; Write-Host "███████║   ██║   ██║     ███████║███████╗  " -NoNewline -ForegroundColor Cyan;   Write-Host "│" -ForegroundColor DarkGray
+Write-Host "  │  " -NoNewline -ForegroundColor DarkGray; Write-Host "██╔══██║   ██║   ██║     ██╔══██║╚════██║  " -NoNewline -ForegroundColor Cyan;   Write-Host "│" -ForegroundColor DarkGray
+Write-Host "  │  " -NoNewline -ForegroundColor DarkGray; Write-Host "██║  ██║   ██║   ███████╗██║  ██║███████║  " -NoNewline -ForegroundColor Cyan;   Write-Host "│" -ForegroundColor DarkGray
+Write-Host "  │  " -NoNewline -ForegroundColor DarkGray; Write-Host "╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝ " -NoNewline -ForegroundColor Cyan;   Write-Host " │" -ForegroundColor DarkGray
+Write-Host "  │                                                │" -ForegroundColor DarkGray
+Write-Host "  │  " -NoNewline -ForegroundColor DarkGray; Write-Host "          ✦  by Alpheric AI  ✦           " -NoNewline -ForegroundColor Cyan;     Write-Host "  │" -ForegroundColor DarkGray
+Write-Host "  │  " -NoNewline -ForegroundColor DarkGray; Write-Host " Agentic AI coding assistant for the terminal" -NoNewline -ForegroundColor DarkGray; Write-Host " │" -ForegroundColor DarkGray
+Write-Host "  │                                                │" -ForegroundColor DarkGray
+Write-Host "  ╰────────────────────────────────────────────────╯" -ForegroundColor DarkGray
+Write-Host ""
+
+# ── 1. Bun ────────────────────────────────────────────────────────────────────
+$bunCmd  = Get-Command bun -ErrorAction SilentlyContinue
+$bunPath = if ($bunCmd) { $bunCmd.Source } else { $null }
+if (-not $bunPath) {
+    $bunBin = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
+    if (-not (Test-Path $bunBin)) {
+        Write-Host "→ Installing Bun..."
+        irm bun.sh/install.ps1 | iex
+    }
+    $bunPath = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
+} else {
+    Write-Host "✓ Bun already installed"
+}
+
+# ── 2. Download Atlas CLI ─────────────────────────────────────────────────────
+Write-Host "→ Downloading Atlas CLI..."
+New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
+New-Item -ItemType Directory -Force -Path $BIN_DIR     | Out-Null
+
+$tarFile = Join-Path $env:TEMP "atlas-cli.tar.gz"
+Invoke-WebRequest "$BASE_URL/downloads/atlas-cli.tar.gz" -OutFile $tarFile
+
+Write-Host "→ Installing to $INSTALL_DIR..."
+tar -xzf $tarFile -C $INSTALL_DIR --strip-components=1
+Remove-Item $tarFile
+
+# ── 3. Create atlas.cmd wrapper ───────────────────────────────────────────────
+$jsPath  = Join-Path $INSTALL_DIR "dist\atlas.js"
+$cmdPath = Join-Path $BIN_DIR "atlas.cmd"
+
+@"
+@echo off
+"$bunPath" run "$jsPath" %*
+"@ | Set-Content $cmdPath
+
+# ── 4. Add to PATH (user scope) ───────────────────────────────────────────────
+$currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+if ($currentPath -notlike "*$BIN_DIR*") {
+    [Environment]::SetEnvironmentVariable("PATH", "$BIN_DIR;$currentPath", "User")
+    $env:PATH = "$BIN_DIR;$env:PATH"
+    Write-Host "✓ Added $BIN_DIR to PATH"
+}
+
+Write-Host ""
+Write-Host "  ✓ Atlas CLI installed!" -ForegroundColor Green
+Write-Host ""
+Write-Host "  Next steps (open a new terminal):" -ForegroundColor DarkCyan
+Write-Host "    atlas config set apiKey  " -NoNewline -ForegroundColor Gray
+Write-Host "<your-key>" -ForegroundColor Yellow
+Write-Host "    atlas config set baseUrl https://atlas.alpheric.ai/v1" -ForegroundColor Gray
+Write-Host "    cd your-project" -ForegroundColor Gray
+Write-Host "    atlas" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  Docs → https://atlas.alpheric.com/docs" -ForegroundColor DarkGray
+Write-Host ""

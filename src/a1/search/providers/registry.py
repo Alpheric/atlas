@@ -73,9 +73,7 @@ class SearchProviderRegistry:
                 self._healthy[provider.name] = False
                 last_err = exc
 
-        raise RuntimeError(
-            f"All search providers failed. Last error: {last_err}"
-        ) from last_err
+        raise RuntimeError(f"All search providers failed. Last error: {last_err}") from last_err
 
     async def health_check_all(self) -> dict[str, bool]:
         """Run health checks for all providers concurrently."""
@@ -100,8 +98,7 @@ class SearchProviderRegistry:
 
     def status(self) -> list[dict]:
         return [
-            {"name": p.name, "healthy": self._healthy.get(p.name, True)}
-            for p in self._providers
+            {"name": p.name, "healthy": self._healthy.get(p.name, True)} for p in self._providers
         ]
 
 
@@ -121,6 +118,7 @@ def init_search_providers() -> None:
 
     if settings.tavily_api_key:
         from a1.search.providers.tavily import TavilyProvider
+
         search_registry.register(
             TavilyProvider(
                 api_key=settings.tavily_api_key,
@@ -132,11 +130,13 @@ def init_search_providers() -> None:
 
     if settings.exa_api_key:
         from a1.search.providers.exa import ExaProvider
+
         search_registry.register(ExaProvider(api_key=settings.exa_api_key))
         registered += 1
 
     if settings.brave_api_key:
         from a1.search.providers.brave import BraveProvider
+
         search_registry.register(BraveProvider(api_key=settings.brave_api_key))
         registered += 1
 
@@ -146,7 +146,4 @@ def init_search_providers() -> None:
             "Set A1_TAVILY_API_KEY, A1_EXA_API_KEY, or A1_BRAVE_API_KEY to enable web search."
         )
     else:
-        log.info(
-            f"Initialised {registered} search provider(s): "
-            f"{search_registry.provider_names()}"
-        )
+        log.info(f"Initialised {registered} search provider(s): {search_registry.provider_names()}")

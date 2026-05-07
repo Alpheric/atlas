@@ -56,10 +56,7 @@ class BraveProvider(SearchProvider):
             url = item.get("url", "")
             # Build snippet from description + extra snippets
             desc = item.get("description", "")
-            extra = " ".join(
-                s.get("text", "")
-                for s in item.get("extra_snippets", [])
-            )
+            extra = " ".join(s.get("text", "") for s in item.get("extra_snippets", []))
             snippet = (desc + " " + extra).strip()
             results.append(
                 SearchResult(

@@ -1217,9 +1217,77 @@ class CorePipeline:
                 )
 
         except Exception as e:
-            result.error = str(e)
-            result.error_type = "provider_error"
             log.error(f"[pipeline] Provider {provider_name}/{model_name} error: {e}")
+            # Attempt OpenAI cascade before declaring failure.
+            # Only for non-streaming non-tool requests (streaming errors surface
+            # to the client during iteration; tool requests are handled above).
+            if not inp.stream and not inp.tools and provider_name != "openai":
+                cascaded = await self._try_openai_cascade(inp, result, task_type, str(e))
+                if not cascaded:
+                    result.error = str(e)
+                    result.error_type = "provider_error"
+            else:
+                result.error = str(e)
+                result.error_type = "provider_error"
+
+    async def _try_openai_cascade(
+        self,
+        inp: "CorePipelineInput",
+        result: "CorePipelineResult",
+        task_type: str,
+        original_error: str,
+    ) -> bool:
+        """Cascade to OpenAI when the primary provider fails (non-streaming, non-tool).
+
+        Controlled by settings.agent_builder_openai_fallback.  Returns True if the
+        fallback produced a response, False otherwise.
+        """
+        if not settings.agent_builder_openai_fallback:
+            return False
+
+        openai_provider = provider_registry.get_provider("openai")
+        if not openai_provider or not provider_registry.is_healthy("openai"):
+            log.debug("[pipeline] OpenAI cascade: provider not healthy — skipping")
+            return False
+
+        fallback_model = "o3-mini" if task_type in ("reasoning", "math") else "gpt-4o"
+        log.warning(
+            f"[pipeline] Primary provider failed ({original_error[:120]}) — "
+            f"cascading to openai/{fallback_model}"
+        )
+
+        try:
+            fb_req = ChatCompletionRequest(
+                model=fallback_model,
+                messages=inp.messages,
+                max_tokens=inp.max_tokens,
+                temperature=inp.temperature,
+            )
+            resp = await asyncio.wait_for(openai_provider.complete(fb_req), timeout=45.0)
+            if not resp.choices:
+                return False
+
+            result.assistant_text = resp.choices[0].message.content or ""
+            result.provider_name = "openai"
+            result.model_name = fallback_model
+            result.is_local = False
+            result.prompt_tokens = resp.usage.prompt_tokens if resp.usage else 0
+            result.completion_tokens = resp.usage.completion_tokens if resp.usage else 0
+            result.total_tokens = resp.usage.total_tokens if resp.usage else 0
+            result.cost_usd = openai_provider.estimate_cost(
+                result.prompt_tokens, result.completion_tokens, fallback_model
+            )
+            result.routing_reason = (result.routing_reason or "") + "+openai_cascade"
+            result.raw_response = resp
+            log.info(
+                f"[pipeline] OpenAI cascade succeeded: "
+                f"{result.completion_tokens} completion tokens via {fallback_model}"
+            )
+            return True
+
+        except Exception as fb_err:
+            log.error(f"[pipeline] OpenAI cascade also failed: {fb_err}")
+            return False
 
     def _post_process(
         self,

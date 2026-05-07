@@ -381,7 +381,9 @@ async def responses_api(
         # Fire-and-forget quality signal persist
         if not result.cache_hit and result.quality_score > 0:
             import asyncio as _asyncio
+
             from a1.healing.quality_scorer import score_and_store as _score_and_store
+
             _asyncio.create_task(
                 _score_and_store(result.assistant_text or "", result.task_type, str(asst_msg.id))
             )

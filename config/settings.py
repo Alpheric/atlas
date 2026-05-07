@@ -139,6 +139,15 @@ class Settings(BaseSettings):
     planning_max_depth: int = 3           # CEO→Manager→Worker hierarchy depth
     planning_max_workers: int = 5         # parallel agent workers per plan
 
+    # Agent builder resilience
+    # When the primary provider (claude-cli / Alpheric) times out or errors during an
+    # agent_builder run, automatically retry on OpenAI gpt-4o if the key is configured.
+    # Disabled by default so cost/behaviour changes are opt-in.
+    agent_builder_openai_fallback: bool = False   # A1_AGENT_BUILDER_OPENAI_FALLBACK
+    # Hard timeout for a single agent execution turn (seconds).
+    # Cloudflare's origin timeout is 100s — keep this under that to avoid 520s.
+    agent_builder_timeout_s: int = 55             # A1_AGENT_BUILDER_TIMEOUT_S
+
     # Phase 1: performance
     parallel_dual_execution: bool = True          # fire local model concurrently with external
     session_load_grace_ms: int = 100              # max ms to wait for session before proceeding
@@ -199,6 +208,77 @@ class Settings(BaseSettings):
     # File uploads
     upload_dir: str = "/var/www/dev/atlas/uploads"  # A1_UPLOAD_DIR
     upload_max_bytes: int = 512 * 1024 * 1024        # A1_UPLOAD_MAX_BYTES (512 MB)
+
+    # ── Cloudflare AI Gateway ──────────────────────────────────────────────────
+    # When enabled, all outbound AI provider calls are routed through the CF AI
+    # Gateway, which adds caching, rate limiting, cost tracking, and real-time
+    # logs without changing the API contract.
+    #
+    # Setup (one-time):
+    #   1. Cloudflare Dashboard → AI → AI Gateway → Create Gateway
+    #   2. Copy the Account ID (from any CF dashboard URL or "Account Home")
+    #   3. Note the gateway name you chose
+    #   4. Set the three env vars below and restart Atlas
+    #
+    # Gateway URL format (auto-built by provider_base_url()):
+    #   https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_name}/{provider}
+    #
+    # Per-provider overrides (openai_base_url etc.) take priority over the
+    # auto-generated gateway URL.  Leave empty to use SDK defaults (bypass CF).
+    cf_ai_gateway_enabled: bool = False          # A1_CF_AI_GATEWAY_ENABLED
+    cf_ai_gateway_account_id: str = ""           # A1_CF_AI_GATEWAY_ACCOUNT_ID
+    cf_ai_gateway_name: str = ""                 # A1_CF_AI_GATEWAY_NAME
+
+    # Per-provider base URL overrides (empty = use CF gateway if enabled, else SDK default)
+    # Use these to point a single provider at a custom proxy, regional endpoint,
+    # or a different CF gateway than the default one above.
+    openai_base_url: str = ""       # A1_OPENAI_BASE_URL   (replaces https://api.openai.com/v1)
+    anthropic_base_url: str = ""    # A1_ANTHROPIC_BASE_URL (replaces https://api.anthropic.com)
+    groq_base_url: str = ""         # A1_GROQ_BASE_URL      (replaces https://api.groq.com/openai/v1)
+
+    def provider_base_url(self, provider: str) -> str | None:
+        """Resolve the effective base URL for a provider.
+
+        Priority order:
+          1. Explicit per-provider override  (e.g. A1_OPENAI_BASE_URL)
+          2. Cloudflare AI Gateway auto-URL  (when A1_CF_AI_GATEWAY_ENABLED=true)
+          3. None  →  SDK / LiteLLM default
+
+        CF AI Gateway URL template per provider:
+          https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_name}/{provider_path}
+
+        Provider paths recognised:
+          openai → /openai       (replaces https://api.openai.com/v1)
+          anthropic → /anthropic (replaces https://api.anthropic.com)
+          groq → /groq           (replaces https://api.groq.com/openai/v1)
+        """
+        # 1. Explicit per-provider override
+        explicit = getattr(self, f"{provider}_base_url", "")
+        if explicit:
+            return explicit
+
+        # 2. CF AI Gateway
+        cf_provider_paths: dict[str, str] = {
+            "openai": "openai",
+            "anthropic": "anthropic",
+            "groq": "groq",
+        }
+        if (
+            self.cf_ai_gateway_enabled
+            and self.cf_ai_gateway_account_id
+            and self.cf_ai_gateway_name
+            and provider in cf_provider_paths
+        ):
+            path = cf_provider_paths[provider]
+            return (
+                f"https://gateway.ai.cloudflare.com/v1"
+                f"/{self.cf_ai_gateway_account_id}"
+                f"/{self.cf_ai_gateway_name}"
+                f"/{path}"
+            )
+
+        # 3. SDK default
+        return None
 
 
 settings = Settings()

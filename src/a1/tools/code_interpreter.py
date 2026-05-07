@@ -174,6 +174,7 @@ TOOL_DECLARATION = {
 # Registration
 # ---------------------------------------------------------------------------
 
+
 def register(registry) -> None:
     """Register code_interpreter into the given ToolRegistry."""
     registry.register("code_interpreter", run_code)

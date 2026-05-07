@@ -29,29 +29,54 @@ router = APIRouter()
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _resolve_conv_source(api_key_hash: str | None) -> tuple[str, str | None]:
     """Return (source_label, tenant_id) for the given key hash.
 
-    Checks atlas_api_keys first (tenant/OneDesk keys), falls back to "proxy".
+    Priority:
+      1. atlas_api_keys — OneDesk tenant keys with explicit source/tenant_id
+      2. Platform master key (ALPHERIC_AI_PLATFORM_API_KEY) → source "onedesk"
+      3. Everything else → source "proxy"
+
     source_label is used as Conversation.source so the dashboard can filter
     by origin: "onedesk", "proxy", etc.
     """
     if not api_key_hash:
         return "proxy", None
+
+    # 1. OneDesk tenant keys created via provisioning
     try:
-        from sqlalchemy import select
+        from sqlalchemy import select as _select
+
         from a1.db.engine import async_session
         from a1.db.models import AtlasApiKey
+
         async with async_session() as db:
-            row = (await db.execute(
-                select(AtlasApiKey.source, AtlasApiKey.tenant_id).where(
-                    AtlasApiKey.key_hash == api_key_hash
+            row = (
+                await db.execute(
+                    _select(AtlasApiKey.source, AtlasApiKey.tenant_id).where(
+                        AtlasApiKey.key_hash == api_key_hash,
+                        AtlasApiKey.status == "active",
+                    )
                 )
-            )).first()
+            ).first()
             if row:
-                return row.source or "proxy", row.tenant_id
+                return row.source or "onedesk", row.tenant_id
     except Exception:
         pass
+
+    # 2. Platform master key (OneDesk → Atlas inter-service calls)
+    try:
+        from a1.common.auth import hash_key
+        from config.settings import settings as _s
+
+        if _s.alpheric_ai_platform_api_key:
+            platform_hash = hash_key(_s.alpheric_ai_platform_api_key)
+            if api_key_hash == platform_hash:
+                return "onedesk", None
+    except Exception:
+        pass
+
     return "proxy", None
 
 
@@ -92,11 +117,11 @@ async def _persist_conversation(
             # Store tenant attribution in metadata
             if meta:
                 from sqlalchemy import update
+
                 from a1.db.models import Conversation
+
                 await session.execute(
-                    update(Conversation)
-                    .where(Conversation.id == conv.id)
-                    .values(metadata_=meta)
+                    update(Conversation).where(Conversation.id == conv.id).values(metadata_=meta)
                 )
             conv_id = conv.id
 
@@ -128,6 +153,7 @@ async def _persist_conversation(
         # Quality signal
         if not result.cache_hit and result.quality_score > 0:
             from a1.healing.quality_scorer import score_and_store as _score_store
+
             asyncio.create_task(
                 _score_store(assistant_text, result.task_type, str(assistant_msg.id))
             )
@@ -147,6 +173,7 @@ async def _persist_conversation(
 # Tool normalisation
 # ---------------------------------------------------------------------------
 
+
 def _normalize_tools(tools: list | None) -> tuple[list | None, bool]:
     """Expand OpenAI special tool types into function declarations Atlas can execute.
 
@@ -156,8 +183,8 @@ def _normalize_tools(tools: list | None) -> tuple[list | None, bool]:
     if not tools:
         return tools, False
 
+    from a1.proxy.request_models import FunctionDef, ToolDef
     from a1.tools.code_interpreter import TOOL_DECLARATION
-    from a1.proxy.request_models import ToolDef, FunctionDef
 
     normalized: list = []
     has_ci = False
@@ -166,14 +193,16 @@ def _normalize_tools(tools: list | None) -> tuple[list | None, bool]:
         if tool_type == "code_interpreter":
             has_ci = True
             fn = TOOL_DECLARATION["function"]
-            normalized.append(ToolDef(
-                type="function",
-                function=FunctionDef(
-                    name=fn["name"],
-                    description=fn["description"],
-                    parameters=fn["parameters"],
-                ),
-            ))
+            normalized.append(
+                ToolDef(
+                    type="function",
+                    function=FunctionDef(
+                        name=fn["name"],
+                        description=fn["description"],
+                        parameters=fn["parameters"],
+                    ),
+                )
+            )
         else:
             normalized.append(t)
     return normalized, has_ci
@@ -182,6 +211,7 @@ def _normalize_tools(tools: list | None) -> tuple[list | None, bool]:
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
+
 
 @router.post("/v1/chat/completions")
 async def chat_completions(
@@ -268,6 +298,7 @@ async def chat_completions(
                 ct = count_tokens_for_model(full_content, model_name)
 
             from a1.proxy.response_models import ChatCompletionChunk
+
             yield ChatCompletionChunk(
                 id="chatcmpl-usage",
                 model=model_name,
@@ -275,9 +306,10 @@ async def chat_completions(
                 usage=Usage(prompt_tokens=pt, completion_tokens=ct, total_tokens=pt + ct),
             )
 
-            # Persist after streaming completes (tool-call turns carry no readable
-            # text to store; skip them to avoid empty assistant messages)
-            if full_content and not has_tool_calls:
+            # Persist after streaming completes.
+            # Always save — even tool-call turns contain the full user context.
+            # assistant_text may be empty for pure tool-call turns; that's fine.
+            if full_content or has_tool_calls:
                 asyncio.create_task(
                     _persist_conversation(
                         inp=inp,
@@ -301,12 +333,32 @@ async def chat_completions(
         resp.task_type = result.task_type
         resp.routing_strategy = result.strategy
         # Fix finish_reason: "tool_calls" when tool_calls are present
+        tool_call_text = ""
         if resp.choices:
             msg = resp.choices[0].message
             has_tool_calls = bool(msg.tool_calls)
             resp.choices[0].finish_reason = "tool_calls" if has_tool_calls else "stop"
             if result.assistant_text and not has_tool_calls:
                 msg.content = result.assistant_text
+            if has_tool_calls:
+                # Build a readable summary of the tool calls for storage
+                tool_call_text = "; ".join(
+                    f"{tc.get('function', {}).get('name', 'tool')}(...)"
+                    for tc in (msg.tool_calls or [])
+                    if isinstance(tc, dict)
+                )
+
+        # Persist non-streaming conversation (always, including tool-call turns)
+        await _persist_conversation(
+            inp=inp,
+            messages=request.messages,
+            assistant_text=result.assistant_text or tool_call_text,
+            result=result,
+            api_key_hash=api_key_hash,
+            source=source,
+            tenant_id=tenant_id,
+            db=db,
+        )
         return resp
 
     # Build from pipeline result (no raw_response — non-tool paths)
@@ -324,7 +376,8 @@ async def chat_completions(
         routing_strategy=result.strategy,
         grounding_metadata=(
             __import__("json").loads(result.grounding_metadata)
-            if result.grounding_metadata else None
+            if result.grounding_metadata
+            else None
         ),
     )
 
