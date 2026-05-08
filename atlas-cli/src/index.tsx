@@ -65,6 +65,7 @@ const cli = meow(
     git                Show git status
     review             Review staged changes
     commit-message     Generate a commit message
+    update             Update Atlas CLI to the latest version
 
   Options
     --model,     -m    Atlas model (default: from config or atlas-code)
@@ -150,20 +151,119 @@ async function handleCLICommand(): Promise<boolean> {
     const ok: string[] = [];
     const issues: string[] = [];
 
+    // API key
     if (cfg.apiKey) ok.push("✓  API key configured");
-    else issues.push("⚠️  No API key — run: atlas config set apiKey sk-atlas-xxx");
+    else issues.push("✗  No API key — run: atlas config set apiKey <key>");
 
-    if (workspace.isGit) ok.push("✓  Git repository detected");
+    // Backend reachability
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(`${cfg.baseUrl.replace(/\/v1.*$/, "")}/health`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) ok.push(`✓  Backend reachable (${cfg.baseUrl})`);
+      else issues.push(`✗  Backend returned ${res.status} — check baseUrl`);
+    } catch {
+      issues.push(`✗  Backend unreachable — check: atlas config set baseUrl <url>`);
+    }
+
+    // Bun version
+    try {
+      const { execSync } = await import("child_process");
+      const bunVer = execSync("bun --version", { encoding: "utf8" }).trim();
+      ok.push(`✓  Bun ${bunVer}`);
+    } catch {
+      issues.push("✗  Bun not found in PATH");
+    }
+
+    // Installed version
+    const { localVersion } = await import("./updater.js");
+    const ver = localVersion();
+    if (ver) ok.push(`✓  Atlas CLI v${ver}`);
+    else issues.push("ℹ️  Version unknown (run: atlas update)");
+
+    // Workspace
+    if (workspace.isGit) ok.push("✓  Git repository");
     else issues.push("ℹ️  Not a git repository");
 
     if (workspace.hasAtlasMd) ok.push("✓  ATLAS.md present");
     else issues.push("ℹ️  No ATLAS.md — run: atlas init");
 
-    if (workspace.hasMemoryMd) ok.push("✓  .atlas/memory.md present");
-    else issues.push("ℹ️  No memory file — run: atlas init");
-
-    [...ok, ...(issues.length ? ["", "Issues:"] : []), ...issues].forEach((l) => console.log(l));
+    console.log("\n  Atlas Doctor\n  " + "─".repeat(32));
+    [...ok, ...(issues.length ? [""] : []), ...issues].forEach((l) => console.log("  " + l));
+    console.log("");
     return true;
+  }
+
+  // ── update ──────────────────────────────────────────────────────────────
+  if (cmd === "update") {
+    const { localVersion, INSTALL_DIR, VERSION_FILE } = await import("./updater.js");
+    const fs = await import("fs");
+    const path = await import("path");
+
+    const BASE_URL = "https://atlas.alpheric.ai";
+    const current = localVersion();
+
+    process.stdout.write("  Checking for updates… ");
+
+    let remote = "";
+    try {
+      const r = await fetch(`${BASE_URL}/downloads/version.txt`, {
+        signal: AbortSignal.timeout(6_000),
+      });
+      remote = r.ok ? (await r.text()).trim() : "";
+    } catch {
+      console.log("\n  ✗  Could not reach update server. Check your connection.");
+      process.exit(1);
+    }
+
+    if (!remote) {
+      console.log("\n  ✗  Update server returned no version.");
+      process.exit(1);
+    }
+
+    if (current === remote) {
+      console.log(`\n  ✓  Already up to date (v${current})`);
+      process.exit(0);
+    }
+
+    console.log(`\n  New version available: v${current || "unknown"} → v${remote}`);
+    process.stdout.write("  Downloading… ");
+
+    let buf: ArrayBuffer;
+    try {
+      const r = await fetch(`${BASE_URL}/downloads/atlas-cli.tar.gz`, {
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      buf = await r.arrayBuffer();
+    } catch (e: unknown) {
+      console.log(`\n  ✗  Download failed: ${e instanceof Error ? e.message : String(e)}`);
+      process.exit(1);
+    }
+
+    const os = await import("os");
+    const tmp = path.join(os.tmpdir(), `atlas-update-${remote}.tar.gz`);
+    fs.writeFileSync(tmp, Buffer.from(buf));
+
+    process.stdout.write("done\n  Installing… ");
+
+    const { spawnSync } = await import("child_process");
+    const r = spawnSync("tar", ["-xzf", tmp, "-C", INSTALL_DIR, "--strip-components=1"], {
+      timeout: 60_000,
+    });
+    try { fs.unlinkSync(tmp); } catch {}
+
+    if (r.status !== 0) {
+      console.log(`\n  ✗  Extraction failed: ${r.stderr?.toString()}`);
+      process.exit(1);
+    }
+
+    fs.writeFileSync(VERSION_FILE, remote + "\n", "utf8");
+    console.log(`done\n\n  ✓  Updated to v${remote} — restart atlas to use the new version.\n`);
+    process.exit(0);
   }
 
   // ── one-shot git/diff commands ──────────────────────────────────────────
