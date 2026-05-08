@@ -299,12 +299,23 @@ async def upload_file(
     from a1.db.models import UploadedFile
     from config.settings import settings
 
+    # Sanitize filename — strip any path components to prevent traversal
+    safe_filename = Path(filename).name  # drops all directory parts
+    if not safe_filename or safe_filename in (".", ".."):
+        safe_filename = "upload.txt"
+
     file_id = f"file-{uuid.uuid4().hex}"
     upload_root = Path(settings.upload_dir)
     upload_root.mkdir(parents=True, exist_ok=True)
     file_dir = upload_root / file_id
     file_dir.mkdir(parents=True, exist_ok=True)
-    dest = file_dir / filename
+    dest = file_dir / safe_filename
+
+    # Final safety check — dest must be inside upload_root
+    dest = dest.resolve()
+    if not str(dest).startswith(str(upload_root.resolve())):
+        return json.dumps({"error": "Invalid filename"})
+
     content_bytes = content.encode("utf-8")
     dest.write_bytes(content_bytes)
 
@@ -313,7 +324,7 @@ async def upload_file(
             db.add(
                 UploadedFile(
                     id=file_id,
-                    filename=filename,
+                    filename=safe_filename,
                     purpose=purpose,
                     bytes_=len(content_bytes),
                     mime_type="text/plain",
@@ -324,7 +335,7 @@ async def upload_file(
     return json.dumps(
         {
             "id": file_id,
-            "filename": filename,
+            "filename": safe_filename,
             "purpose": purpose,
             "bytes": len(content_bytes),
             "created_at": int(time.time()),

@@ -1301,9 +1301,25 @@ class CorePipeline:
     ):
         """Steps 8-12: cache store, session save, metrics, DB persist."""
         # Step 8: Cache store
+        # Guard: never cache error responses from the CLI or provider — they look like
+        # valid text ("Not logged in", "Claude CLI exit code 1", etc.) but are poison.
+        _CACHE_POISON_SIGNALS = (
+            "not logged in",
+            "authentication",
+            "cli exit code",
+            "no healthy",
+            "timed out after",
+            "rate limit",
+            "overloaded",
+            "internal server error",
+        )
+        _text_lower = (result.assistant_text or "").lower()
+        _is_poisoned = any(s in _text_lower for s in _CACHE_POISON_SIGNALS)
+
         if (
             not inp.stream
             and not result.error
+            and not _is_poisoned
             and result.assistant_text
             and settings.task_cache_enabled
             and result.atlas_model

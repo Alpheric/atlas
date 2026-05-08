@@ -241,10 +241,12 @@ def create_app() -> FastAPI:
 
     app.include_router(provisioning_router)
 
-    # MCP server — mount SSE transport at /mcp
+    # MCP server — mount SSE transport at /mcp (protected by API key middleware)
     from a1.mcp.server import mcp as _mcp
+    from a1.mcp.auth import MCPAuthMiddleware
 
-    app.mount("/mcp", _mcp.sse_app())
+    _mcp_app = MCPAuthMiddleware(_mcp.sse_app())
+    app.mount("/mcp", _mcp_app)
 
     # Atlas CLI installer — serve install scripts + pre-built bundle
     # install.sh  → curl -fsSL https://atlas.alpheric.ai/install.sh | bash
