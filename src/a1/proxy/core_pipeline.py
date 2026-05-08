@@ -153,11 +153,11 @@ class CorePipelineResult:
     raw_response: object | None = None
 
 
-async def _tool_complete_and_stream(provider, req, timeout: float = 25.0, fallback=None):
+async def _tool_complete_and_stream(provider, req, timeout: float = 120.0, fallback=None):
     """Run provider.complete() INSIDE the stream so SSE starts immediately.
 
     Emits the role chunk right away to keep Ares/Hermes alive during inference.
-    If provider times out (default 25s) and a fallback provider is given, retries
+    If provider times out (default 120s) and a fallback provider is given, retries
     once on the fallback before emitting an error chunk.
     """
     from a1.proxy.response_models import ChatCompletionChunk, DeltaMessage, StreamChoice
@@ -197,7 +197,7 @@ async def _tool_complete_and_stream(provider, req, timeout: float = 25.0, fallba
             model=model,
             choices=[
                 StreamChoice(
-                    delta=DeltaMessage(content="Tool execution timed out. Please try again."),
+                    delta=DeltaMessage(content=f"Request timed out after {settings.agent_execution_timeout}s. The model took too long to respond — please try again."),
                     finish_reason="stop",
                 )
             ],
@@ -904,7 +904,7 @@ class CorePipeline:
                     result.chunk_iterator = _tool_complete_and_stream(
                         vertex,
                         req,
-                        timeout=30.0,
+                        timeout=float(settings.agent_execution_timeout),
                         fallback=cli if cli_ok else None,
                     )
                     result.provider_name = "vertex"
@@ -914,7 +914,9 @@ class CorePipeline:
                 resp = None
                 used_provider = "vertex"
                 try:
-                    resp = await asyncio.wait_for(vertex.complete(req), timeout=30.0)
+                    resp = await asyncio.wait_for(
+                        vertex.complete(req), timeout=float(settings.agent_execution_timeout)
+                    )
                 except (asyncio.TimeoutError, Exception) as e:
                     log.warning(
                         f"[pipeline] vertex tool call failed ({e}) — falling back to claude-cli"
