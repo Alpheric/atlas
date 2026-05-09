@@ -198,6 +198,15 @@ class ProviderRegistry:
             )
             log.info(f"Registered Groq via LiteLLM ({len(models)} models)")
 
+        # Veo video generation (registered separately — uses its own HTTP client)
+        if settings.vertex_api_key or settings.vertex_project_id:
+            try:
+                from a1.providers.veo import VeoProvider
+                self._providers["veo"] = VeoProvider()
+                log.info("Registered Veo (video generation)")
+            except Exception as e:
+                log.warning(f"Could not register Veo provider: {e}")
+
         if settings.vertex_project_id or settings.vertex_api_key:
             models = _load_provider_models("vertex")
             # When using a Google AI Studio API key (auth_type="api_key"), LiteLLM
@@ -247,6 +256,15 @@ class ProviderRegistry:
 
             self._providers["vertex"] = VertexProvider()
             log.info("Registered Vertex (native)")
+
+        # Veo video generation (uses same Vertex/Gemini credentials)
+        if settings.vertex_api_key or settings.vertex_project_id:
+            try:
+                from a1.providers.veo import VeoProvider
+                self._providers["veo"] = VeoProvider()
+                log.info("Registered Veo (video generation)")
+            except Exception as e:
+                log.warning(f"Could not register Veo provider: {e}")
 
         # Initial health check
         await self.refresh_health()

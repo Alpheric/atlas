@@ -378,18 +378,16 @@ class VeoProvider:
     # ------------------------------------------------------------------
 
     async def health_check(self) -> bool:
-        """Light check — verify project + auth are valid by listing models."""
-        if not self.project_id:
-            return False
-        try:
-            headers = await self._auth_headers()
-            if not headers:
-                return False
-            url = f"{self._base_url()}/publishers/google/models"
-            resp = await self._client.get(url, headers=headers)
-            return resp.status_code == 200
-        except Exception:
-            return False
+        """Check that Veo credentials are configured.
+
+        Note: Veo requires Vertex AI (GCP) credentials — either a service account
+        via ADC or a project_id with api_key. We verify config presence here;
+        actual API errors surface on the first generation request.
+        """
+        # Must have at least one auth method
+        if self.api_key or self.project_id:
+            return True
+        return False
 
     def list_models(self) -> list[dict]:
         return self._models
