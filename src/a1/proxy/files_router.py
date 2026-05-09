@@ -126,11 +126,17 @@ async def upload_file(
         raise HTTPException(status_code=413, detail=f"File exceeds {max_mb} MB limit.")
 
     file_id = f"file-{uuid.uuid4().hex}"
-    filename = file.filename or "upload"
+    # Sanitize filename — strip all directory components to prevent path traversal.
+    # Path("../../etc/passwd").name == "passwd", Path("/etc/passwd").name == "passwd"
+    raw_name = file.filename or "upload"
+    filename = Path(raw_name).name or "upload"
     mime_type = file.content_type or _MIME_FALLBACK
 
-    # Write to disk
-    dest = _file_dir(file_id) / filename
+    # Write to disk — resolve and verify dest stays inside upload root
+    upload_root = _upload_root().resolve()
+    dest = (_file_dir(file_id) / filename).resolve()
+    if not str(dest).startswith(str(upload_root)):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
     dest.write_bytes(content)
 
     async with async_session() as db:

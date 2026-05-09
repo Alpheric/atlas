@@ -22,7 +22,6 @@ Tools exposed:
   chat           — send a message to Atlas, get a completion
   search_store   — semantic search over a vector store
   embed          — create text embeddings
-  run_code       — execute Python in the sandbox
   list_models    — list available Atlas models
   upload_file    — upload text content as a file
   read_file      — read a previously-uploaded file
@@ -43,7 +42,7 @@ mcp = FastMCP(
         "Atlas is an enterprise AI middleware platform by Alpheric Technologies. "
         "Use the `chat` tool to send messages to Atlas models. "
         "Use `search_store` for semantic retrieval from a vector store. "
-        "Use `run_code` to execute Python computations. "
+
         "Use `embed` to create text embeddings."
     ),
 )
@@ -207,24 +206,20 @@ async def embed(
 
 
 # ---------------------------------------------------------------------------
-# Tool: run_code
+# Tool: run_code  (DISABLED — security: unrestricted OS execution)
 # ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def run_code(code: str) -> str:
-    """Execute Python code in a sandboxed subprocess.
-
-    Args:
-        code: Python code to execute. Print what you want to see.
-              matplotlib, numpy, and standard library are available.
-
-    Returns:
-        Combined stdout + stderr from the execution.
-    """
-    from a1.tools.code_interpreter import run_code as _run
-
-    return await _run(code)
+# run_code is intentionally NOT exposed on the public MCP endpoint.
+# The code_interpreter runs as the server OS user with no sandbox (no Docker,
+# no seccomp, no builtins restriction).  Exposing it via MCP would grant any
+# API key holder full shell access to the host.
+#
+# To re-enable: add proper sandboxing (Docker/gVisor) and restrict to admin
+# keys only, then restore the @mcp.tool() decorator below.
+#
+# @mcp.tool()
+# async def run_code(code: str) -> str:
+#     from a1.tools.code_interpreter import run_code as _run
+#     return await _run(code)
 
 
 # ---------------------------------------------------------------------------
