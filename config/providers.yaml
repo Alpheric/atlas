@@ -93,27 +93,27 @@ providers:
         latency_class: realtime
 
   vertex:
-    enabled: false
+    enabled: true
     models:
-      - name: gemini-2.0-flash
+      - name: gemini-2.5-pro
+        context_window: 1000000
+        cost_per_1k_input: 0.00125
+        cost_per_1k_output: 0.01
+        supports_tools: true
+        supports_streaming: true
+        supports_vision: true
+        max_output_tokens: 65536
+        tier: frontier
+        latency_class: normal
+      - name: gemini-2.5-flash
         context_window: 1000000
         cost_per_1k_input: 0.00015
         cost_per_1k_output: 0.0006
         supports_tools: true
         supports_streaming: true
         supports_vision: true
-        max_output_tokens: 8192
+        max_output_tokens: 65536
         tier: fast
-        latency_class: normal
-      - name: gemini-1.5-pro
-        context_window: 2000000
-        cost_per_1k_input: 0.00125
-        cost_per_1k_output: 0.005
-        supports_tools: true
-        supports_streaming: true
-        supports_vision: true
-        max_output_tokens: 8192
-        tier: frontier
         latency_class: normal
 
   # --- Moonshot / Kimi (long-context, cost-efficient) ---
