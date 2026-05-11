@@ -96,6 +96,9 @@ interface PartialToolCall {
 // Streaming — yields CompletionChunk events
 // ---------------------------------------------------------------------------
 
+// 20-minute timeout — matches backend agent_execution_timeout
+const FETCH_TIMEOUT_MS = 20 * 60 * 1000;
+
 /** Stream a chat completion and yield CompletionChunk events. */
 export async function* streamCompletion(
   config: AtlasConfig,
@@ -108,6 +111,7 @@ export async function* streamCompletion(
       method: "POST",
       headers: buildHeaders(config),
       body: buildBody(config, messages, true, tools),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch (err: unknown) {
     throw new Error(`Network error: ${err instanceof Error ? err.message : String(err)}`);
@@ -229,6 +233,7 @@ export async function completeSync(
       method: "POST",
       headers: buildHeaders(config),
       body: buildBody(config, messages, false),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch (err: unknown) {
     throw new Error(`Network error: ${err instanceof Error ? err.message : String(err)}`);

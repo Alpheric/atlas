@@ -135,7 +135,7 @@ class Settings(BaseSettings):
 
     # Platform features
     computer_use_enabled: bool = False
-    agent_execution_timeout: int = 120    # seconds per agent turn
+    agent_execution_timeout: int = 1200   # seconds per agent turn (20 min)
     planning_max_depth: int = 3           # CEO→Manager→Worker hierarchy depth
     planning_max_workers: int = 5         # parallel agent workers per plan
 
