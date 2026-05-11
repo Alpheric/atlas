@@ -129,8 +129,61 @@ esac
 echo ""
 echo "  ✓ Atlas CLI installed!"
 echo ""
+
+# ── 5. Configure API key + baseUrl ────────────────────────────────────────────
+# When installed via `curl | bash`, stdin is the pipe — read from /dev/tty
+# so the prompts actually work.
+CONFIG_DIR="$HOME/.config/atlas-cli"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+mkdir -p "$CONFIG_DIR"
+
+EXISTING_KEY=""
+if [ -f "$CONFIG_FILE" ]; then
+  # Extract existing apiKey if any (best-effort; no jq dependency)
+  EXISTING_KEY=$(sed -n 's/.*"apiKey"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG_FILE" | head -n1)
+fi
+
+# Skip prompt if env var already provides a key, or if config already has one.
+ENV_KEY="${ATLAS_API_KEY:-${ALPHERIC_API_KEY:-}}"
+
+if [ -n "$ENV_KEY" ]; then
+  printf "  ${G}✓${R} Using API key from environment (ATLAS_API_KEY)\n"
+elif [ -n "$EXISTING_KEY" ]; then
+  printf "  ${G}✓${R} API key already configured at %s\n" "$CONFIG_FILE"
+elif [ ! -t 0 ] && [ ! -e /dev/tty ]; then
+  echo "  ⚠  No TTY available — skipping API key prompt."
+  echo "     Run later:  atlas config set apiKey <your-key>"
+else
+  echo ""
+  printf "  Enter your Atlas API key (starts with sk-atlas-) — or press Enter to skip:\n"
+  printf "  ${C}> ${R}"
+  if [ -e /dev/tty ]; then
+    read -r USER_KEY < /dev/tty || USER_KEY=""
+  else
+    read -r USER_KEY || USER_KEY=""
+  fi
+
+  if [ -n "$USER_KEY" ]; then
+    # Escape backslashes and double quotes for JSON safety
+    ESC_KEY=$(printf '%s' "$USER_KEY" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+    cat > "$CONFIG_FILE" <<EOF
+{
+  "apiKey": "$ESC_KEY",
+  "baseUrl": "https://atlas.alpheric.ai/v1",
+  "model": "atlas-code",
+  "stream": true
+}
+EOF
+    chmod 600 "$CONFIG_FILE"
+    printf "  ${G}✓${R} API key saved to %s\n" "$CONFIG_FILE"
+  else
+    echo "  ℹ  Skipped. Configure later with: atlas config set apiKey <your-key>"
+  fi
+fi
+
+echo ""
 echo "  Next steps:"
-echo "    atlas config set apiKey  <your-key>"
-echo "    atlas config set baseUrl https://atlas.alpheric.ai/v1"
 echo "    cd your-project && atlas"
+echo ""
+echo "  Don't have a key? Get one at https://atlas.alpheric.ai"
 echo ""
