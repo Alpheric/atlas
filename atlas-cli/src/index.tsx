@@ -1564,8 +1564,8 @@ function Root({ initialConfig, workspace, agentEnabled, autoModel, systemPromptO
     }
   }
 
-  // Fire-and-forget background update check (never blocks startup)
-  checkForUpdates();
+  // Fire-and-forget background update check (never blocks startup, never crashes)
+  try { checkForUpdates(); } catch { /* updater must never crash CLI */ }
 
   // Detect workspace + load config
   const [workspace, persisted] = await Promise.all([

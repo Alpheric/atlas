@@ -100,18 +100,36 @@ async function run() {
 run().catch(() => {});
 `;
 
+  // Bulletproof spawn: any error here (EACCES, ENOENT, asynchronously
+  // emitted 'error' events) MUST be swallowed silently — the auto-updater
+  // is best-effort. A failure here must never crash the CLI.
   try {
-    // Find bun binary — same one running us right now
     const bunBin = process.execPath; // e.g. /home/user/.bun/bin/bun
 
-    const child = spawn(bunBin, ["--eval", workerScript], {
-      detached: true,          // fully independent OS process
-      stdio:    "ignore",      // no stdin/stdout/stderr — completely silent
-      env:      process.env,
-    });
+    // Sanity-check that the binary is executable for the current user.
+    // If not, skip entirely — spawn would throw EACCES.
+    try {
+      fs.accessSync(bunBin, fs.constants.X_OK);
+    } catch {
+      return;
+    }
 
-    child.unref(); // let the main process exit without waiting for child
+    let child;
+    try {
+      child = spawn(bunBin, ["--eval", workerScript], {
+        detached: true,
+        stdio:    "ignore",
+        env:      process.env,
+      });
+    } catch {
+      return; // spawn threw synchronously (EACCES, ENOENT, etc.)
+    }
+
+    // Catch asynchronous 'error' events so they don't bubble to the
+    // unhandledRejection / uncaughtException handlers and crash the app.
+    try { child.on("error", () => { /* swallow */ }); } catch {}
+    try { child.unref(); } catch {}
   } catch {
-    // If spawn fails for any reason, just skip — never crash the CLI
+    // Last-ditch catch — never crash
   }
 }
