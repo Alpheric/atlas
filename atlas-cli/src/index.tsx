@@ -21,11 +21,12 @@
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { render, Box, Text, useApp, useInput } from "ink";
+import Spinner from "ink-spinner";
 import meow from "meow";
 
 import { loadConfig, saveConfig, getConfigPath, AtlasConfig } from "./config.js";
 import { SetupScreen } from "./components/SetupScreen.js";
-import { Message, streamCompletion, UsageInfo, stripToolBlocks } from "./api.js";
+import { Message, streamCompletion, completeSync, UsageInfo, stripToolBlocks } from "./api.js";
 import { MessageList } from "./components/MessageList.js";
 import { InputBox } from "./components/InputBox.js";
 import { StatusBar } from "./components/StatusBar.js";
@@ -33,10 +34,12 @@ import { ApprovalPrompt } from "./components/ApprovalPrompt.js";
 import { ToolCallDisplay } from "./components/ToolCallDisplay.js";
 import { DiffViewer } from "./components/DiffViewer.js";
 import { Banner } from "./components/Banner.js";
+import { MarkdownRenderer } from "./components/MarkdownRenderer.js";
 
 import { detectWorkspace, WorkspaceInfo } from "./workspace.js";
 import { checkForUpdates } from "./updater.js";
-import { loadProjectContext, loadCustomCommands } from "./project-context.js";
+import { loadProjectContext, loadCustomCommands, saveMemory } from "./project-context.js";
+import { saveSession, listSessions, loadSession, newSessionId, deleteOldSessions } from "./session.js";
 import { loadPermissions, savePermissions, PermissionConfig } from "./permissions.js";
 import { AuditLog } from "./audit.js";
 import { runAgentLoop, buildSystemPrompt, AgentEvent } from "./agent-loop.js";
@@ -57,6 +60,7 @@ const cli = meow(
 
   Commands
     (none)             Interactive agentic chat
+    ask <prompt>       One-shot: get answer printed to stdout (no TUI)
     config             Show config
     config set <k> <v> Set a config value
     init               Initialise .atlas/ workspace
@@ -66,6 +70,10 @@ const cli = meow(
     review             Review staged changes
     commit-message     Generate a commit message
     update             Update Atlas CLI to the latest version
+
+  Pipe mode
+    cat file | atlas          Analyse file content
+    cat error.log | atlas "fix this"   Combine piped content with a prompt
 
   Options
     --model,     -m    Atlas model (default: from config or atlas-code)
@@ -169,13 +177,26 @@ async function handleCLICommand(): Promise<boolean> {
       issues.push(`✗  Backend unreachable — check: atlas config set baseUrl <url>`);
     }
 
-    // Bun version
+    // Bun version — check common install locations, not just PATH
     try {
       const { execSync } = await import("child_process");
-      const bunVer = execSync("bun --version", { encoding: "utf8" }).trim();
-      ok.push(`✓  Bun ${bunVer}`);
+      const bunPaths = [
+        "bun",
+        `${process.env.HOME ?? ""}/.bun/bin/bun`,
+        "/opt/homebrew/bin/bun",
+        "/usr/local/bin/bun",
+      ];
+      let bunVer = "";
+      for (const b of bunPaths) {
+        try {
+          bunVer = execSync(`"${b}" --version`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          if (bunVer) break;
+        } catch { /* try next */ }
+      }
+      if (bunVer) ok.push(`✓  Bun ${bunVer}`);
+      else issues.push("✗  Bun not found — install from https://bun.sh");
     } catch {
-      issues.push("✗  Bun not found in PATH");
+      issues.push("✗  Bun not found — install from https://bun.sh");
     }
 
     // Installed version
@@ -232,38 +253,62 @@ async function handleCLICommand(): Promise<boolean> {
     console.log(`\n  New version available: v${current || "unknown"} → v${remote}`);
     process.stdout.write("  Downloading… ");
 
-    let buf: ArrayBuffer;
-    try {
-      const r = await fetch(`${BASE_URL}/downloads/atlas-cli.tar.gz`, {
-        signal: AbortSignal.timeout(120_000),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      buf = await r.arrayBuffer();
-    } catch (e: unknown) {
-      console.log(`\n  ✗  Download failed: ${e instanceof Error ? e.message : String(e)}`);
-      process.exit(1);
-    }
+    // Download atlas.js and yoga.wasm directly — no tar extraction needed.
+    // This avoids macOS BSD tar --strip-components incompatibilities.
+    const distDir = path.join(INSTALL_DIR, "dist");
+    try { fs.mkdirSync(distDir, { recursive: true }); } catch {}
 
-    const os = await import("os");
-    const tmp = path.join(os.tmpdir(), `atlas-update-${remote}.tar.gz`);
-    fs.writeFileSync(tmp, Buffer.from(buf));
+    const files = [
+      { url: `${BASE_URL}/downloads/atlas.js`,   dest: path.join(distDir, "atlas.js"),   mode: 0o644 },
+      { url: `${BASE_URL}/downloads/yoga.wasm`,  dest: path.join(distDir, "yoga.wasm"),  mode: 0o644 },
+    ];
+
+    for (const file of files) {
+      try {
+        const r = await fetch(file.url, { signal: AbortSignal.timeout(120_000) });
+        if (!r.ok) throw new Error(`HTTP ${r.status} for ${file.url}`);
+        const buf = Buffer.from(await r.arrayBuffer());
+        fs.writeFileSync(file.dest, buf, { mode: file.mode });
+        // Touch mtime to ensure Bun's bytecode cache is invalidated
+        const now = new Date();
+        try { fs.utimesSync(file.dest, now, now); } catch {}
+      } catch (e: unknown) {
+        console.log(`\n  ✗  Download failed: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
+    }
 
     process.stdout.write("done\n  Installing… ");
-
-    const { spawnSync } = await import("child_process");
-    const r = spawnSync("tar", ["-xzf", tmp, "-C", INSTALL_DIR, "--strip-components=1"], {
-      timeout: 60_000,
-    });
-    try { fs.unlinkSync(tmp); } catch {}
-
-    if (r.status !== 0) {
-      console.log(`\n  ✗  Extraction failed: ${r.stderr?.toString()}`);
-      process.exit(1);
-    }
 
     fs.writeFileSync(VERSION_FILE, remote + "\n", "utf8");
     console.log(`done\n\n  ✓  Updated to v${remote} — restart atlas to use the new version.\n`);
     process.exit(0);
+  }
+
+  // ── ask  — one-shot prompt: atlas ask "explain auth.ts" ─────────────────
+  if (cmd === "ask") {
+    const prompt = rest.join(" ").trim();
+    if (!prompt) { console.error("Usage: atlas ask <prompt>"); process.exit(1); }
+    const cfg = loadConfig();
+    const config: AtlasConfig = {
+      apiKey:  cli.flags.key   ?? cfg.apiKey,
+      baseUrl: cli.flags.url   ?? cfg.baseUrl,
+      model:   cli.flags.model ?? cfg.model,
+      stream:  cfg.stream,
+    };
+    process.stdout.write(""); // ensure stdout is ready
+    try {
+      const { streamCompletion } = await import("./api.js");
+      const msgs: Message[] = [{ role: "user", content: prompt }];
+      for await (const event of streamCompletion(config, msgs)) {
+        if (event.type === "text") process.stdout.write(event.content);
+      }
+      process.stdout.write("\n");
+    } catch (e: unknown) {
+      console.error("Error:", e instanceof Error ? e.message : String(e));
+      process.exit(1);
+    }
+    return true;
   }
 
   // ── one-shot git/diff commands ──────────────────────────────────────────
@@ -337,9 +382,125 @@ function App({
   const [events, setEvents] = useState<EventItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [usage, setUsage] = useState<UsageInfo | undefined>();
+  const [totalCost, setTotalCost] = useState(0);  // cumulative USD for the session
   const [error, setError] = useState<string | undefined>();
+  const [gitBranch, setGitBranch] = useState<string | undefined>();
   // Number of completed user→assistant turns (drives compact header threshold)
   const [turnCount, setTurnCount] = useState(0);
+
+  // ── Mascot — inline animation above status bar ───────────────────────────
+  const mTRef = useRef(0), mPRef = useRef(3);
+  const [mTick, setMTick] = useState(0);
+  const [mPos,  setMPos]  = useState(3);
+  const [mDir,  setMDir]  = useState(0);
+  const [mBlink, setMBlink] = useState(false);
+  const [mDone,  setMDone]  = useState(false);
+  const prevLoadRef = useRef(false);
+
+  const mState = loading ? "thinking" : mDone ? "happy" : "idle";
+
+  useEffect(() => {
+    if (prevLoadRef.current && !loading) {
+      setMDone(true);
+      setTimeout(() => setMDone(false), 750);
+    }
+    prevLoadRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    const ms = mState === "thinking" ? 100 : 140;
+    const id = setInterval(() => {
+      const t = ++mTRef.current, prev = mPRef.current;
+      const next = mState === "thinking" ? 3
+        : mState === "happy" ? 3 + (t % 4 < 2 ? 0 : 1)
+        : Math.round(3 + 3 * Math.sin(t * 0.09));
+      mPRef.current = next;
+      setMTick(t); setMPos(next); setMDir(next > prev ? 1 : next < prev ? -1 : 0);
+    }, ms);
+    mTRef.current = 0; mPRef.current = 3; setMPos(3); setMDir(0);
+    return () => clearInterval(id);
+  }, [mState]);
+
+  useEffect(() => {
+    if (mState !== "idle") { setMBlink(false); return; }
+    let alive = true, t1: ReturnType<typeof setTimeout>, t2: ReturnType<typeof setTimeout>;
+    const loop = () => { t1 = setTimeout(() => { if (!alive) return; setMBlink(true); t2 = setTimeout(() => { if (!alive) return; setMBlink(false); loop(); }, 110); }, 2000 + Math.random() * 3000); };
+    loop(); return () => { alive = false; clearTimeout(t1); clearTimeout(t2); };
+  }, [mState]);
+
+  const mTips  = ["✦","✧","·","✧"], mStars = ["★","✦","✧","·","✧","✦"], mDots = ["·  ","·· ","···","·· "];
+  const mFaces: Record<string,string> = { normal:"◕ω◕", blink:"─ω─", thinking:"●_●", happy:"^ω^", wink:"◕ω─" };
+  const mTip  = mTips[mTick % mTips.length] ?? "✦";
+  const mStar = mState === "happy" ? (mStars[mTick % mStars.length] ?? "★") : "★";
+  const mFKey = mState === "thinking" ? "thinking" : mState === "happy" ? "happy" : mBlink ? "blink" : mTick % 55 > 52 ? "wink" : "normal";
+  const mEyes = mFaces[mFKey] ?? "◕ω◕";
+  const mAL   = mDir === -1 ? "<" : " ", mAR = mDir === 1 ? ">" : " ";
+  const mPad  = " ".repeat(Math.max(0, mPos));
+  const mL1   = `${mPad}  ${mTip}◆${mTip}`;
+  const mL2   = `${mPad}${mAL}(${mEyes})${mAR}`;
+  const mL3   = mState === "thinking" ? `${mPad}  ${mDots[mTick % mDots.length] ?? "·  "}` : `${mPad}  ╘${mStar}╛`;
+
+  // Detect git branch once on mount
+  useEffect(() => {
+    import("child_process").then(({ execSync }) => {
+      try {
+        const branch = execSync("git branch --show-current", {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+        if (branch) setGitBranch(branch);
+      } catch { /* not a git repo or git not installed */ }
+    });
+  }, []);
+
+  // ── F10: Auto-save session after every turn ───────────────────────────────
+  useEffect(() => {
+    if (turnCount === 0 || messages.length === 0) return;
+    const firstUser = messages.find(m => m.role === "user");
+    const preview = String(firstUser?.content ?? "").slice(0, 100);
+    saveSession({
+      id: sessionIdRef.current,
+      timestamp: new Date().toISOString(),
+      workspace: workspace.cwd,
+      model: config.model,
+      messages,
+      preview,
+      turnCount,
+    });
+    // Prune sessions older than 30 days (once per session startup is enough;
+    // here we do it on first save only)
+    if (turnCount === 1) deleteOldSessions(30);
+  }, [turnCount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Auto-save memory every 3 turns ───────────────────────────────────────
+  // Silently writes a fresh summary to .atlas/memory.md in the background so
+  // future sessions start with up-to-date context. Never blocks the UI.
+  useEffect(() => {
+    if (turnCount === 0 || turnCount % 3 !== 0) return;
+    if (!workspace.atlasConfigDir || messages.length < 2) return;
+
+    const MEMORY_PROMPT =
+      "Summarise our conversation so far into a concise project memory update. " +
+      "Include: key decisions made, files changed, current task status, and any " +
+      "important context a future session should know. " +
+      "Format as clean markdown. Keep it under 400 words. No preamble.";
+
+    const memMessages: Message[] = [
+      ...messages,
+      { role: "user", content: MEMORY_PROMPT },
+    ];
+
+    const atlasDir = workspace.atlasConfigDir;
+    const ts = new Date().toISOString().replace("T", " ").slice(0, 16);
+
+    completeSync(config, memMessages)
+      .then(({ text }) => {
+        if (text.trim()) {
+          saveMemory(atlasDir, `# Atlas Memory\n_Last updated: ${ts}_\n\n${text.trim()}\n`);
+        }
+      })
+      .catch(() => { /* silent — memory save should never surface errors */ });
+  }, [turnCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Approval prompt state
   const [approvalPending, setApprovalPending] = useState<{
@@ -361,6 +522,38 @@ function App({
       return [...prev, { kind: "assistant", text, streaming }];
     });
   }, []);
+
+  // ── Streaming throttle — buffer chunks, flush at ~30 fps ─────────────────
+  // Without this, setEvents() is called on every ~80-byte SSE chunk which causes
+  // Ink to repaint the entire terminal tree at 80+ fps → visible flicker.
+  const streamBufferRef = useRef<string>("");
+  const flushTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopFlushTimer = useCallback(() => {
+    if (flushTimerRef.current) {
+      clearInterval(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+  }, []);
+
+  const startFlushTimer = useCallback(() => {
+    if (flushTimerRef.current) return; // already running
+    flushTimerRef.current = setInterval(() => {
+      const buf = streamBufferRef.current;
+      if (!buf) return;
+      streamBufferRef.current = "";
+      setEvents((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.kind === "assistant" && last.streaming) {
+          return [...prev.slice(0, -1), { kind: "assistant", text: last.text + buf, streaming: true }];
+        }
+        return [...prev, { kind: "assistant", text: buf, streaming: true }];
+      });
+    }, 33); // ~30 fps
+  }, []);
+
+  // Clean up on unmount (e.g. Ctrl+C while streaming)
+  useEffect(() => () => stopFlushTimer(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateLastTool = useCallback(
     (status: "running" | "done" | "denied" | "error", result?: string) => {
@@ -394,9 +587,41 @@ function App({
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Ctrl+C to quit
+  // Abort controller for Esc-to-interrupt
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Queue: message typed while loading — auto-submitted when response finishes
+  const pendingQueueRef = useRef<string | null>(null);
+  // Stable ref to latest handleSubmit — avoids putting it in useEffect dep arrays
+  // which causes Bun-minifier TDZ errors when the const is referenced before init.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleSubmitRef = useRef<(text: string) => void>(() => {});
+
+  // Stable session ID for this run
+  const sessionIdRef = useRef<string>(newSessionId());
+
+  // Ctrl+C to quit · Esc to interrupt current response
   useInput((input, key) => {
     if (key.ctrl && input === "c") exit();
+    if (key.escape && loading) {
+      abortRef.current?.abort();
+      stopFlushTimer();
+      const remaining = streamBufferRef.current;
+      streamBufferRef.current = "";
+      setEvents(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.kind === "assistant" && last.streaming) {
+          const text = stripToolBlocks(last.text + remaining).trim();
+          return [
+            ...prev.slice(0, -1),
+            { kind: "assistant", text: text || "(interrupted)", streaming: false },
+            { kind: "system", text: "⚠ Interrupted" },
+          ];
+        }
+        return [...prev, { kind: "system", text: "⚠ Interrupted" }];
+      });
+      setLoading(false);
+    }
   });
 
   // ── Agent event handler ──────────────────────────────────────────────────
@@ -408,33 +633,37 @@ function App({
           // Don't emit chunks that are only inside tool blocks
           const visible = stripToolBlocks(chunk);
           if (visible) {
-            setEvents((prev) => {
-              const last = prev[prev.length - 1];
-              if (last?.kind === "assistant" && last.streaming) {
-                return [
-                  ...prev.slice(0, -1),
-                  { kind: "assistant", text: last.text + chunk, streaming: true },
-                ];
-              }
-              return [...prev, { kind: "assistant", text: chunk, streaming: true }];
-            });
+            // Accumulate in a ref — the 30fps flush timer (startFlushTimer) will
+            // batch these into a single setEvents() call per frame instead of
+            // one per chunk, eliminating the flicker caused by ~80 repaints/sec.
+            streamBufferRef.current += chunk;
+            startFlushTimer();
           }
           break;
         }
 
         case "tool_call": {
           if (event.toolCall) {
-            // Finalise the streaming assistant bubble (strip tool block from display)
+            // Flush any buffered text, then finalise the streaming bubble
+            stopFlushTimer();
+            const remaining = streamBufferRef.current;
+            streamBufferRef.current = "";
             setEvents((prev) => {
               const last = prev[prev.length - 1];
-              if (last?.kind === "assistant" && last.streaming) {
-                const cleaned = stripToolBlocks(last.text).trim();
+              const isStreaming = last?.kind === "assistant" && last.streaming;
+              const allText = isStreaming ? last.text + remaining : remaining;
+              const cleaned = stripToolBlocks(allText).trim();
+              if (isStreaming) {
                 const updated = cleaned
-                  ? [{ ...last, text: cleaned, streaming: false }]
+                  ? [...prev.slice(0, -1), { kind: "assistant" as const, text: cleaned, streaming: false }]
                   : prev.slice(0, -1);
                 return [...updated, { kind: "tool", toolCall: event.toolCall!, status: "running" }];
               }
-              return [...prev, { kind: "tool", toolCall: event.toolCall!, status: "running" }];
+              // If there's pre-tool text that never flushed, add it before the tool
+              const base = cleaned
+                ? [...prev, { kind: "assistant" as const, text: cleaned, streaming: false }]
+                : prev;
+              return [...base, { kind: "tool", toolCall: event.toolCall!, status: "running" }];
             });
           }
           break;
@@ -469,30 +698,50 @@ function App({
         }
 
         case "done": {
-          // Finalise last streaming bubble
+          // Flush any remaining buffered text, then finalise the streaming bubble.
+          // Important: if the response was fast enough that the 33ms flush timer
+          // never ticked, there is no existing streaming assistant event — in that
+          // case we create one from the buffered text instead of silently dropping it.
+          stopFlushTimer();
+          const remaining = streamBufferRef.current;
+          streamBufferRef.current = "";
           setEvents((prev) => {
             const last = prev[prev.length - 1];
-            if (last?.kind === "assistant" && last.streaming) {
-              return [
-                ...prev.slice(0, -1),
-                { ...last, text: stripToolBlocks(last.text).trim(), streaming: false },
-              ];
+            const isStreaming = last?.kind === "assistant" && last.streaming;
+            const allText = isStreaming ? last.text + remaining : remaining;
+            const finalText = stripToolBlocks(allText).trim();
+            if (!finalText) return prev; // truly empty response — nothing to show
+            if (isStreaming) {
+              return [...prev.slice(0, -1), { ...last, text: finalText, streaming: false }];
             }
-            return prev;
+            // Timer never fired — create the event now
+            return [...prev, { kind: "assistant" as const, text: finalText, streaming: false }];
           });
-          if (event.usage) setUsage(event.usage);
+          if (event.usage) {
+            setUsage(event.usage);
+            // Rough cost estimate — varies by model but gives a useful ballpark
+            const costPer1kIn  = 0.003;  // ~claude-3 sonnet rates
+            const costPer1kOut = 0.015;
+            const cost = (event.usage.inputTokens / 1000) * costPer1kIn
+                       + (event.usage.outputTokens / 1000) * costPer1kOut;
+            setTotalCost(prev => prev + cost);
+          }
           setTurnCount(c => c + 1);
           break;
         }
       }
     },
-    [appendEvent, updateLastTool]
+    [appendEvent, updateLastTool, startFlushTimer, stopFlushTimer]
   );
 
   // ── Submit handler ────────────────────────────────────────────────────────
   const handleSubmit = useCallback(
     async (userText: string) => {
-      if (loading) return;
+      if (loading) {
+        // Queue the message — it will auto-send when the current response finishes
+        pendingQueueRef.current = userText;
+        return;
+      }
 
       // ── Slash command ────────────────────────────────────────────────────
       if (userText.startsWith("/")) {
@@ -585,6 +834,316 @@ function App({
             );
             return;
           }
+
+          case "add_files": {
+            const pattern = result.text ?? "";
+            if (!pattern) return;
+            setLoading(true);
+            try {
+              const fs = await import("fs");
+              const path = await import("path");
+              const { glob } = await import("glob").catch(() => ({ glob: null }));
+
+              // Collect matching files
+              let files: string[] = [];
+              if (glob) {
+                files = await glob(pattern, { cwd: workspace.cwd, nodir: true });
+              } else {
+                // Fallback: treat as literal path
+                const abs = path.resolve(workspace.cwd, pattern);
+                if (fs.existsSync(abs)) files = [pattern];
+              }
+
+              if (files.length === 0) {
+                appendEvent({ kind: "system", text: `No files matched: ${pattern}` });
+                return;
+              }
+
+              // Read each file and inject as system messages
+              let added = 0;
+              for (const file of files.slice(0, 20)) { // cap at 20 files
+                try {
+                  const abs = path.resolve(workspace.cwd, file);
+                  const content = fs.readFileSync(abs, "utf-8");
+                  const ext = path.extname(file).slice(1) || "text";
+                  const injection = `\`\`\`${ext}\n// File: ${file}\n${content}\n\`\`\``;
+                  setMessages(prev => [...prev, { role: "user", content: `Context file: ${file}\n\n${injection}` }, { role: "assistant", content: `I've read ${file} and have it in context.` }]);
+                  added++;
+                } catch { /* skip unreadable files */ }
+              }
+              const extra = files.length > 20 ? ` (${files.length - 20} more skipped — cap is 20)` : "";
+              appendEvent({ kind: "system", text: `📎 Added ${added} file${added === 1 ? "" : "s"} to context${extra}` });
+            } catch (e: unknown) {
+              appendEvent({ kind: "error", text: `Failed to add files: ${String(e)}` });
+            } finally {
+              setLoading(false);
+            }
+            return;
+          }
+
+          // ── F6: /fix loop ─────────────────────────────────────────────────────
+          case "fix_loop": {
+            if (loading) return;
+            const rawCmd = result.text?.trim() || "";
+
+            // Auto-detect test/build command from project type
+            const detectCmd = async (): Promise<string> => {
+              if (rawCmd) return rawCmd;
+              try {
+                const fs = await import("fs");
+                const path = await import("path");
+                const pkgPath = path.join(workspace.cwd, "package.json");
+                if (fs.existsSync(pkgPath)) {
+                  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+                  if (pkg.scripts?.test) return "npm test";
+                  if (pkg.scripts?.build) return "npm run build";
+                }
+                if (fs.existsSync(path.join(workspace.cwd, "Cargo.toml"))) return "cargo test";
+                if (fs.existsSync(path.join(workspace.cwd, "go.mod"))) return "go test ./...";
+                if (fs.existsSync(path.join(workspace.cwd, "pytest.ini")) ||
+                    fs.existsSync(path.join(workspace.cwd, "pyproject.toml"))) return "pytest";
+              } catch { /* ignore */ }
+              return "npm test";
+            };
+
+            const fixCmd = await detectCmd();
+            const MAX_FIX = 5;
+            setLoading(true);
+
+            let currentMessages = [...messages];
+            try {
+              for (let attempt = 1; attempt <= MAX_FIX; attempt++) {
+                appendEvent({ kind: "system", text: `🔧 Attempt ${attempt}/${MAX_FIX} — running: ${fixCmd}` });
+
+                const { spawnSync } = await import("child_process");
+                const ran = spawnSync(fixCmd, {
+                  shell: true, cwd: workspace.cwd, encoding: "utf8", timeout: 120_000,
+                });
+                const output = ((ran.stdout ?? "") + (ran.stderr ?? "")).trim();
+                const exitCode = ran.status ?? 1;
+
+                if (exitCode === 0) {
+                  appendEvent({ kind: "system", text: `✓ All checks pass${attempt > 1 ? ` after ${attempt} fix${attempt === 1 ? "" : "es"}` : ""}!` });
+                  setMessages(currentMessages);
+                  break;
+                }
+
+                if (attempt === MAX_FIX) {
+                  appendEvent({ kind: "error", text: `Still failing after ${MAX_FIX} attempts — manual fix needed.` });
+                  break;
+                }
+
+                appendEvent({ kind: "system", text: `✗ Failed (exit ${exitCode}) — asking Atlas to fix…` });
+
+                const fixPrompt =
+                  `Command \`${fixCmd}\` failed with exit code ${exitCode}.\n\n` +
+                  `**Output:**\n\`\`\`\n${output.slice(0, 3000)}\n\`\`\`\n\n` +
+                  `Please fix the errors. Read the failing files, apply the fix, then I'll re-run.`;
+
+                const abort = new AbortController();
+                abortRef.current = abort;
+                const { messages: updated } = await runAgentLoop({
+                  config,
+                  messages: [...currentMessages, { role: "user", content: fixPrompt }],
+                  systemPrompt, permissions,
+                  workspaceRoot: workspace.cwd, audit,
+                  onEvent: handleAgentEvent, maxTurns: 8,
+                  signal: abort.signal,
+                });
+                currentMessages = updated;
+                setMessages(updated);
+                if (abort.signal.aborted) break;
+              }
+            } finally {
+              setLoading(false);
+            }
+            return;
+          }
+
+          // ── F7: /commit ────────────────────────────────────────────────────
+          case "commit": {
+            if (loading) return;
+            // Check for staged changes first
+            try {
+              const { execSync } = await import("child_process");
+              const staged = execSync("git diff --staged --stat", {
+                cwd: workspace.cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+              }).trim();
+              if (!staged) {
+                appendEvent({ kind: "system", text: "Nothing staged. Run `git add <files>` first." });
+                return;
+              }
+            } catch { /* not a git repo — let agent handle it */ }
+
+            // Delegate to agent: generate + commit
+            handleSubmit(
+              "Generate a concise commit message for the staged changes " +
+              "(use git_diff with staged:true to see them), then run: " +
+              "git commit -m \"<message>\". Show the final commit hash."
+            );
+            return;
+          }
+
+          // ── F11: /rollback ─────────────────────────────────────────────────
+          case "rollback": {
+            const recent = audit.getRecent(20).filter(
+              e => (e.tool === "write_file" || e.tool === "edit_file") && e.success
+            );
+            if (recent.length === 0) {
+              appendEvent({ kind: "system", text: "No file changes recorded this session." });
+              return;
+            }
+
+            const fs = await import("fs");
+            const path = await import("path");
+            const backupDir = workspace.atlasConfigDir
+              ? path.join(workspace.atlasConfigDir, "backups")
+              : null;
+
+            let restored = 0;
+            const skipped: string[] = [];
+
+            for (const entry of [...recent].reverse().slice(0, 5)) {
+              const filePath = String(entry.args.path ?? "");
+              if (!filePath) continue;
+              const backupPath = backupDir
+                ? path.join(backupDir, filePath.replace(/[/\\]/g, "_"))
+                : null;
+              if (backupPath && fs.existsSync(backupPath)) {
+                try {
+                  const abs = path.resolve(workspace.cwd, filePath);
+                  fs.copyFileSync(backupPath, abs);
+                  restored++;
+                  appendEvent({ kind: "system", text: `↩ Restored: ${filePath}` });
+                } catch {
+                  skipped.push(filePath);
+                }
+              } else {
+                skipped.push(filePath);
+              }
+            }
+
+            if (restored === 0) {
+              appendEvent({ kind: "system", text: "No backups found. Backups are created in .atlas/backups/ during write/edit operations." });
+            } else if (skipped.length > 0) {
+              appendEvent({ kind: "system", text: `Skipped (no backup): ${skipped.join(", ")}` });
+            }
+            return;
+          }
+
+          // ── F12: /copy ─────────────────────────────────────────────────────
+          case "copy_last": {
+            const lastAssistant = [...events].reverse().find(e => e.kind === "assistant");
+            if (!lastAssistant || lastAssistant.kind !== "assistant") {
+              appendEvent({ kind: "system", text: "Nothing to copy yet." });
+              return;
+            }
+            const text = lastAssistant.text;
+            try {
+              const { spawnSync } = await import("child_process");
+              // Try platform clipboard commands
+              const cmds = [
+                ["pbcopy"],                          // macOS
+                ["xclip", "-selection", "clipboard"], // Linux X11
+                ["wl-copy"],                         // Linux Wayland
+                ["clip"],                            // Windows
+              ];
+              let copied = false;
+              for (const [bin, ...args] of cmds) {
+                const r = spawnSync(bin, args, {
+                  input: text, encoding: "utf8",
+                  stdio: ["pipe", "ignore", "ignore"],
+                  timeout: 3000,
+                });
+                if (r.status === 0) { copied = true; break; }
+              }
+              if (copied) {
+                appendEvent({ kind: "system", text: `📋 Copied (${text.length} chars)` });
+              } else {
+                appendEvent({ kind: "system", text: "Clipboard not available — copy manually from above." });
+              }
+            } catch {
+              appendEvent({ kind: "system", text: "Clipboard not available on this system." });
+            }
+            return;
+          }
+
+          // ── F10: /history ─────────────────────────────────────────────────
+          case "history": {
+            const sessions = listSessions(15);
+            if (sessions.length === 0) {
+              appendEvent({ kind: "system", text: "No saved sessions yet. Sessions are saved automatically after each turn." });
+              return;
+            }
+            const lines = ["**Saved sessions** (newest first — use `/resume <n>` to restore):\n"];
+            sessions.forEach((s, i) => {
+              const date = new Date(s.timestamp).toLocaleString();
+              const ws = s.workspace.split("/").slice(-2).join("/");
+              const preview = s.preview.replace(/\n/g, " ").slice(0, 60);
+              lines.push(`  **${i + 1}.** [${date}] ${ws} · ${s.turnCount} turn${s.turnCount === 1 ? "" : "s"}\n      _${preview}${preview.length >= 60 ? "…" : ""}_`);
+            });
+            appendEvent({ kind: "system", text: lines.join("\n") });
+            return;
+          }
+
+          // ── F10: /resume <n> ──────────────────────────────────────────────
+          case "resume_session": {
+            const idx = parseInt(result.text ?? "1", 10) - 1;
+            const sessions = listSessions(15);
+            if (isNaN(idx) || idx < 0 || idx >= sessions.length) {
+              appendEvent({ kind: "system", text: `Invalid session number. Use /history to see available sessions.` });
+              return;
+            }
+            const session = loadSession(sessions[idx].id);
+            if (!session) {
+              appendEvent({ kind: "error", text: "Could not load session — file may have been deleted." });
+              return;
+            }
+            setMessages(session.messages);
+            setEvents([]);
+            const date = new Date(session.timestamp).toLocaleString();
+            appendEvent({
+              kind: "system",
+              text: `↩ Restored session from ${date} (${session.turnCount} turns, ${session.messages.length} messages)\n  Workspace: ${session.workspace}\n  Model: ${session.model}`,
+            });
+            // Replay the last user/assistant pair as visual context
+            const lastPair = session.messages.filter(m => m.role === "user" || m.role === "assistant").slice(-2);
+            for (const m of lastPair) {
+              if (m.role === "user") appendEvent({ kind: "user", text: String(m.content ?? "") });
+              if (m.role === "assistant") appendEvent({ kind: "assistant", text: String(m.content ?? ""), streaming: false });
+            }
+            return;
+          }
+
+          case "save_memory": {
+            if (!workspace.atlasConfigDir || messages.length < 2) {
+              appendEvent({ kind: "system", text: "Nothing to save yet — have a conversation first." });
+              return;
+            }
+            appendEvent({ kind: "system", text: "💾 Saving memory…" });
+            const MEMORY_PROMPT =
+              "Summarise our conversation so far into a concise project memory update. " +
+              "Include: key decisions made, files changed, current task status, and any " +
+              "important context a future session should know. " +
+              "Format as clean markdown. Keep it under 400 words. No preamble.";
+            const memMessages: Message[] = [
+              ...messages,
+              { role: "user", content: MEMORY_PROMPT },
+            ];
+            const atlasDir = workspace.atlasConfigDir;
+            const ts = new Date().toISOString().replace("T", " ").slice(0, 16);
+            completeSync(config, memMessages)
+              .then(({ text }) => {
+                if (text.trim()) {
+                  saveMemory(atlasDir, `# Atlas Memory\n_Last updated: ${ts}_\n\n${text.trim()}\n`);
+                  appendEvent({ kind: "system", text: "✓ Memory saved to .atlas/memory.md" });
+                }
+              })
+              .catch((e: unknown) => {
+                appendEvent({ kind: "error", text: `Memory save failed: ${String(e)}` });
+              });
+            return;
+          }
         }
         return;
       }
@@ -593,10 +1152,80 @@ function App({
       setLoading(true);
       setError(undefined);
 
+      // F9 — Auto-context: scan message for file paths → silently pre-inject
+      const autoContextMessages: Message[] = [];
+      try {
+        const fs = await import("fs");
+        const path = await import("path");
+        // Match paths like src/auth.ts, ./config.py, auth.ts — with common code extensions
+        const pathRe = /(?:^|[\s"'`(])((\.{0,2}\/)?[\w./-]+\.(?:ts|tsx|js|jsx|py|go|rs|java|kt|cs|cpp|c|h|rb|php|swift|yaml|yml|json|toml|md|sh|bash))\b/g;
+        const seen = new Set<string>();
+        let m: RegExpExecArray | null;
+        while ((m = pathRe.exec(userText)) !== null) {
+          const candidate = m[1].trim();
+          if (seen.has(candidate)) continue;
+          seen.add(candidate);
+          const abs = path.resolve(workspace.cwd, candidate);
+          if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+            try {
+              const content = fs.readFileSync(abs, "utf-8");
+              const ext = path.extname(candidate).slice(1);
+              autoContextMessages.push(
+                { role: "user",      content: `[Auto-context] ${candidate}:\n\`\`\`${ext}\n${content.slice(0, 8000)}\n\`\`\`` },
+                { role: "assistant", content: `I have read ${candidate} and have it in context.` }
+              );
+            } catch { /* unreadable — skip */ }
+          }
+        }
+      } catch { /* fs errors — skip auto-context silently */ }
+
       const userMsg: Message = { role: "user", content: userText };
-      const nextMessages = [...messages, userMsg];
+      let nextMessages = [...messages, ...autoContextMessages, userMsg];
       setMessages(nextMessages);
       appendEvent({ kind: "user", text: userText });
+
+      // F13 — Auto-compact: if context is getting large, summarise first
+      const TOKEN_LIMIT = 80_000;
+      const estTokens = nextMessages.reduce(
+        (sum, m) => sum + Math.ceil(String(m.content ?? "").length / 4), 0
+      );
+      if (estTokens > TOKEN_LIMIT && nextMessages.length > 12) {
+        appendEvent({
+          kind: "system",
+          text: `📦 Context ~${Math.round(estTokens / 1000)}K tokens — auto-compacting…`,
+        });
+        try {
+          const { text: summary } = await completeSync(config, [
+            ...nextMessages,
+            {
+              role: "user",
+              content:
+                "Summarise this entire conversation in 400 words: key decisions made, " +
+                "code changes applied, current state, and any open tasks. Be dense and precise.",
+            },
+          ]);
+          if (summary.trim()) {
+            // Keep: summary bubble + last 6 messages + new user message
+            const tail = nextMessages
+              .filter(m => m.role !== "system")
+              .slice(-6);
+            nextMessages = [
+              { role: "user",      content: "**Conversation summary (auto-compacted):**" },
+              { role: "assistant", content: summary.trim() },
+              ...tail,
+            ];
+            setMessages(nextMessages);
+            appendEvent({
+              kind: "system",
+              text: `✓ Compacted — continuing with summary + last ${tail.length} messages`,
+            });
+          }
+        } catch { /* if compact fails, proceed with full context */ }
+      }
+
+      // Fresh abort controller for this turn
+      const abort = new AbortController();
+      abortRef.current = abort;
 
       try {
         if (agentEnabled) {
@@ -610,22 +1239,28 @@ function App({
             autoRoute: autoModel,
             onEvent: handleAgentEvent,
             maxTurns: 15,
+            signal: abort.signal,
           });
           setMessages(updatedMessages);
           if (u) setUsage(u);
         } else {
-          // Plain chat (no tools)
+          // Plain chat (no tools) — throttle to ~30fps to avoid flicker
           let fullText = "";
+          let lastFlush = 0;
           const sysMessages: Message[] = [{ role: "system", content: systemPrompt }, ...nextMessages];
           for await (const event of streamCompletion(config, sysMessages)) {
             if (event.type === "text") {
               fullText += event.content;
-              updateLastAssistant(fullText, true);
+              const now = Date.now();
+              if (now - lastFlush >= 33) {
+                lastFlush = now;
+                updateLastAssistant(fullText, true);
+              }
             } else if (event.type === "usage") {
               setUsage(event.usage);
             }
           }
-          updateLastAssistant(fullText, false);
+          updateLastAssistant(fullText, false); // final flush
           setMessages([...nextMessages, { role: "assistant", content: fullText }]);
         }
       } catch (e: unknown) {
@@ -638,6 +1273,20 @@ function App({
     },
     [loading, messages, config, permissions, workspace, agentEnabled, autoModel, audit, customCommands, systemPrompt, handleAgentEvent, appendEvent, updateLastAssistant, updateLastTool, exit]
   );
+
+  // Keep the ref in sync with the latest handleSubmit (no dep-array issues)
+  handleSubmitRef.current = handleSubmit;
+
+  // ── Queue fire — uses ref so handleSubmit never appears in a dep array ────
+  useEffect(() => {
+    if (!loading) {
+      const queued = pendingQueueRef.current;
+      if (queued) {
+        pendingQueueRef.current = null;
+        setTimeout(() => handleSubmitRef.current(queued), 80);
+      }
+    }
+  }, [loading]); // ← only loading; handleSubmit accessed via stable ref
 
   // ── Render ────────────────────────────────────────────────────────────────
   // Short workspace path for the banner
@@ -667,8 +1316,10 @@ function App({
             case "user":
               return (
                 <Box key={i} flexDirection="column" marginTop={1} marginBottom={0}>
-                  {/* Turn separator (not on the first user message) */}
-                  {i > 0 && <Text dimColor>{"─".repeat(40)}</Text>}
+                  {/* Turn separator (not on the first user message) — full terminal width */}
+                  {i > 0 && (
+                    <Text dimColor>{"─".repeat(process.stdout.columns ? Math.min(process.stdout.columns - 2, 80) : 60)}</Text>
+                  )}
                   <Box gap={1} alignItems="flex-start">
                     <Text color="cyan" bold>▶</Text>
                     <Text color="cyan" bold>you</Text>
@@ -687,11 +1338,17 @@ function App({
                     <Text color="green" bold>atlas</Text>
                     {e.streaming && <Text color="green" dimColor>…</Text>}
                   </Box>
-                  <Box marginLeft={3}>
-                    <Text>
-                      {e.text || ""}
-                      {e.streaming ? <Text color="green">▌</Text> : null}
-                    </Text>
+                  <Box marginLeft={3} flexDirection="column">
+                    {e.streaming ? (
+                      /* Plain text while streaming — avoids parsing partial markdown */
+                      <Text>
+                        {e.text || ""}
+                        <Text color="green">▌</Text>
+                      </Text>
+                    ) : (
+                      /* Full markdown render once complete */
+                      <MarkdownRenderer content={e.text || ""} />
+                    )}
                   </Box>
                 </Box>
               );
@@ -733,6 +1390,16 @@ function App({
           }
         })}
 
+        {/* V3 — Thinking indicator: shown when loading but no streaming bubble yet */}
+        {loading && !events.some(e => e.kind === "assistant" && e.streaming) && (
+          <Box marginTop={1} gap={1} marginLeft={0}>
+            <Text color="green" bold>◆</Text>
+            <Text color="green" bold>atlas</Text>
+            <Text color="green"><Spinner type="dots" /></Text>
+            <Text color="green" dimColor>thinking</Text>
+          </Box>
+        )}
+
         {/* Empty state — only show before any events AND without the big banner (which already shows tips) */}
         {events.length === 0 && compactHeader && (
           <Box marginTop={1}>
@@ -759,26 +1426,39 @@ function App({
         />
       )}
 
+      {/* ── Mascot — only in empty/welcome state, hidden once chat starts ── */}
+      {events.length === 0 && (
+        <>
+          <Text color="greenBright" bold>{mL1}</Text>
+          <Text color="green"       bold>{mL2}</Text>
+          <Text color="cyan"        bold>{mL3}</Text>
+        </>
+      )}
+
       {/* ── Status bar ── */}
       <StatusBar
         model={config.model}
         baseUrl={config.baseUrl}
         loading={loading}
         usage={usage}
+        totalCost={totalCost}
         error={error}
         permissionMode={permissions.mode}
         cwd={workspace.cwd}
         turnCount={turnCount}
+        gitBranch={gitBranch}
       />
 
-      {/* ── Input ── */}
+      {/* ── Input (always active for typing; submit queues if loading) ── */}
       <InputBox
         onSubmit={handleSubmit}
-        disabled={loading || !!approvalPending}
+        disabled={!!approvalPending}
         placeholder={
-          agentEnabled
-            ? "Message Atlas… (↑↓ history · /help for commands)"
-            : "Message Atlas… (plain chat, no tools)"
+          loading
+            ? "Composing… (↵ queues for after response · Esc interrupt)"
+            : agentEnabled
+              ? "Message Atlas… (↑↓ history · Shift+Enter newline · Esc interrupt · /help)"
+              : "Message Atlas… (plain chat · Shift+Enter newline · Esc interrupt)"
         }
       />
     </Box>
@@ -840,6 +1520,40 @@ function Root({ initialConfig, workspace, agentEnabled, autoModel, systemPromptO
 (async () => {
   // Handle non-TUI commands first
   if (await handleCLICommand()) process.exit(0);
+
+  // ── Stdin pipe mode: cat error.log | atlas "what's wrong?" ──────────────
+  if (!process.stdin.isTTY) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+    const stdinContent = Buffer.concat(chunks).toString("utf-8").trim();
+
+    if (stdinContent) {
+      const cfg = loadConfig();
+      const config: AtlasConfig = {
+        apiKey:  cli.flags.key   ?? cfg.apiKey,
+        baseUrl: cli.flags.url   ?? cfg.baseUrl,
+        model:   cli.flags.model ?? cfg.model,
+        stream:  cfg.stream,
+      };
+      // If a prompt was also passed as positional arg, combine; otherwise ask to analyse
+      const extraPrompt = cli.input.join(" ").trim();
+      const prompt = extraPrompt
+        ? `${extraPrompt}\n\n${stdinContent}`
+        : `Analyse the following:\n\n${stdinContent}`;
+      try {
+        const { streamCompletion } = await import("./api.js");
+        const msgs: Message[] = [{ role: "user", content: prompt }];
+        for await (const event of streamCompletion(config, msgs)) {
+          if (event.type === "text") process.stdout.write(event.content);
+        }
+        process.stdout.write("\n");
+      } catch (e: unknown) {
+        console.error("Error:", e instanceof Error ? e.message : String(e));
+        process.exit(1);
+      }
+      process.exit(0);
+    }
+  }
 
   // Fire-and-forget background update check (never blocks startup)
   checkForUpdates();

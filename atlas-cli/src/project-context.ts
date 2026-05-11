@@ -38,6 +38,16 @@ export function loadProjectContext(info: WorkspaceInfo): ProjectContext {
   return { atlasMd, memoryMd, summary };
 }
 
+/** Write (overwrite) .atlas/memory.md with new content. Creates the file if absent. */
+export function saveMemory(atlasDir: string, content: string): void {
+  const memoryPath = path.join(atlasDir, "memory.md");
+  try {
+    fs.writeFileSync(memoryPath, content, "utf-8");
+  } catch {
+    // silently ignore — e.g. read-only filesystem
+  }
+}
+
 /** Load custom slash commands from .atlas/commands/*.md */
 export function loadCustomCommands(atlasDir?: string): Record<string, string> {
   if (!atlasDir) return {};

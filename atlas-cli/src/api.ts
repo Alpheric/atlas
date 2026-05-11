@@ -96,24 +96,31 @@ interface PartialToolCall {
 // Streaming — yields CompletionChunk events
 // ---------------------------------------------------------------------------
 
-// 20-minute timeout — matches backend agent_execution_timeout
-const FETCH_TIMEOUT_MS = 20 * 60 * 1000;
+// 100-minute timeout — matches backend agent_execution_timeout
+const FETCH_TIMEOUT_MS = 100 * 60 * 1000;
 
 /** Stream a chat completion and yield CompletionChunk events. */
 export async function* streamCompletion(
   config: AtlasConfig,
   messages: Message[],
-  tools?: OpenAITool[]
+  tools?: OpenAITool[],
+  signal?: AbortSignal
 ): AsyncGenerator<CompletionChunk, void, unknown> {
   let response: Response;
+  // Combine user abort signal with the global fetch timeout
+  const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const combinedSignal = signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
   try {
     response = await fetch(`${config.baseUrl}/chat/completions`, {
       method: "POST",
       headers: buildHeaders(config),
       body: buildBody(config, messages, true, tools),
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: combinedSignal,
     });
   } catch (err: unknown) {
+    if (signal?.aborted) throw new DOMException("Interrupted by user", "AbortError");
     throw new Error(`Network error: ${err instanceof Error ? err.message : String(err)}`);
   }
 
@@ -225,17 +232,23 @@ export async function* streamCompletion(
 /** Collect a full completion (non-streaming). */
 export async function completeSync(
   config: AtlasConfig,
-  messages: Message[]
+  messages: Message[],
+  signal?: AbortSignal
 ): Promise<{ text: string; usage?: UsageInfo }> {
   let response: Response;
+  const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const combinedSignal = signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
   try {
     response = await fetch(`${config.baseUrl}/chat/completions`, {
       method: "POST",
       headers: buildHeaders(config),
       body: buildBody(config, messages, false),
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: combinedSignal,
     });
   } catch (err: unknown) {
+    if (signal?.aborted) throw new DOMException("Interrupted by user", "AbortError");
     throw new Error(`Network error: ${err instanceof Error ? err.message : String(err)}`);
   }
 

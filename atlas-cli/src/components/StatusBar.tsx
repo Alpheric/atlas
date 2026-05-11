@@ -9,10 +9,12 @@ interface Props {
   baseUrl: string;
   loading: boolean;
   usage?: UsageInfo;
+  totalCost?: number;   // cumulative session cost in USD
   error?: string;
   permissionMode?: PermissionMode;
   cwd?: string;
   turnCount?: number;
+  gitBranch?: string;
 }
 
 const PERM_LABEL: Record<PermissionMode, string> = {
@@ -34,10 +36,12 @@ export function StatusBar({
   baseUrl,
   loading,
   usage,
+  totalCost,
   error,
   permissionMode,
   cwd,
   turnCount,
+  gitBranch,
 }: Props) {
   const host = (() => {
     try { return new URL(baseUrl).host; } catch { return baseUrl; }
@@ -84,6 +88,13 @@ export function StatusBar({
           </>
         )}
 
+        {gitBranch && (
+          <>
+            <Text dimColor>│</Text>
+            <Text color="magenta" dimColor>⎇ {gitBranch}</Text>
+          </>
+        )}
+
         {turnCount != null && turnCount > 0 && !loading && (
           <>
             <Text dimColor>│</Text>
@@ -102,6 +113,11 @@ export function StatusBar({
         {usage && !loading && (
           <Text dimColor>
             ↑{fmt(usage.inputTokens)} ↓{fmt(usage.outputTokens)} tok
+          </Text>
+        )}
+        {totalCost != null && totalCost > 0 && !loading && (
+          <Text dimColor>
+            ~${totalCost < 0.01 ? totalCost.toFixed(4) : totalCost.toFixed(3)}
           </Text>
         )}
       </Box>

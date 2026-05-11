@@ -12,7 +12,7 @@
 import { spawn }  from "child_process";
 import fs         from "fs";
 import path       from "path";
-import os         from "os";
+import os         from "os"; // kept for INSTALL_DIR (os.homedir)
 
 export const INSTALL_DIR  = path.join(os.homedir(), ".atlas-cli");
 export const VERSION_FILE = path.join(INSTALL_DIR, "version.txt");
@@ -35,7 +35,6 @@ export function checkForUpdates(): void {
   const workerScript = /* ts */ `
 import fs   from "fs";
 import path from "path";
-import os   from "os";
 
 const BASE_URL    = ${JSON.stringify(BASE_URL)};
 const INSTALL_DIR = ${JSON.stringify(INSTALL_DIR)};
@@ -67,34 +66,31 @@ async function run() {
 
   log("update available: " + local + " → " + remote);
 
-  // 3. Download tarball
-  let buf;
-  try {
-    const r = await fetch(BASE_URL + "/downloads/atlas-cli.tar.gz", {
-      signal: AbortSignal.timeout(120_000),
-    });
-    if (!r.ok) { log("download failed: " + r.status); return; }
-    buf = Buffer.from(await r.arrayBuffer());
-  } catch (e) { log("download error: " + e); return; }
+  // 3. Download atlas.js and yoga.wasm directly — no tar extraction needed.
+  //    macOS BSD tar --strip-components silently fails to overwrite existing
+  //    files, so we bypass tar entirely and write files directly.
+  const distDir = path.join(INSTALL_DIR, "dist");
+  try { fs.mkdirSync(distDir, { recursive: true }); } catch {}
 
-  // 4. Write to temp file
-  const tmp = path.join(os.tmpdir(), "atlas-update-" + remote + ".tar.gz");
-  try { fs.writeFileSync(tmp, buf); }
-  catch (e) { log("write tmp failed: " + e); return; }
+  const files = [
+    { url: BASE_URL + "/downloads/atlas.js",  dest: path.join(distDir, "atlas.js"),  mode: 0o644 },
+    { url: BASE_URL + "/downloads/yoga.wasm", dest: path.join(distDir, "yoga.wasm"), mode: 0o644 },
+  ];
 
-  // 5. Extract (overwrites dist/)
-  const { spawnSync } = await import("child_process");
-  const r = spawnSync("tar", ["-xzf", tmp, "-C", INSTALL_DIR, "--strip-components=1"], {
-    timeout: 60_000,
-  });
-  try { fs.unlinkSync(tmp); } catch {}
-
-  if (r.status !== 0) {
-    log("tar failed: " + (r.stderr?.toString() ?? ""));
-    return;
+  for (const file of files) {
+    try {
+      const r = await fetch(file.url, { signal: AbortSignal.timeout(120_000) });
+      if (!r.ok) { log("download failed: " + r.status + " " + file.url); return; }
+      const buf = Buffer.from(await r.arrayBuffer());
+      fs.writeFileSync(file.dest, buf, { mode: file.mode });
+      // Force mtime update so Bun doesn't serve stale bytecode cache
+      const now = new Date();
+      try { fs.utimesSync(file.dest, now, now); } catch {}
+      log("wrote " + file.dest + " (" + buf.length + " bytes)");
+    } catch (e) { log("error writing " + file.url + ": " + e); return; }
   }
 
-  // 6. Stamp new version
+  // 4. Stamp new version
   try { fs.writeFileSync(VER_FILE, remote + "\\n"); }
   catch (e) { log("version stamp failed: " + e); return; }
 

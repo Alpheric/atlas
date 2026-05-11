@@ -35,13 +35,19 @@ tar -czf "$TARBALL" \
   dist/atlas \
   dist/yoga.wasm
 
-# ── 3. Bump version ───────────────────────────────────────────────────────────
+# ── 3. Copy individual files (used by direct-download updater) ───────────────
+echo "→ Copying individual files for direct-download updater…"
+cp "$DIST/atlas.js"  "$DOWNLOADS/atlas.js"
+cp "$DIST/yoga.wasm" "$DOWNLOADS/yoga.wasm"
+
+# ── 4. Bump version ───────────────────────────────────────────────────────────
 VERSION=$(date +%Y%m%d%H%M)
 echo "$VERSION" > "$DOWNLOADS/version.txt"
 
 echo ""
 echo "  ✓ Published atlas-cli v$VERSION"
 echo "  ✓ Tarball  → $TARBALL  ($(du -sh "$TARBALL" | cut -f1))"
+echo "  ✓ atlas.js → $DOWNLOADS/atlas.js"
 echo "  ✓ Version  → $DOWNLOADS/version.txt"
 echo ""
 echo "  Users will receive this update silently on next 'atlas' launch."

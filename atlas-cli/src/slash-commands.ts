@@ -25,7 +25,16 @@ export type SlashAction =
   | "compact"         // compact / summarise conversation
   | "exit"            // exit the CLI
   | "init"            // run atlas init
-  | "run_tool";       // directly invoke a tool
+  | "run_tool"        // directly invoke a tool
+  | "save_memory"     // force an immediate memory save
+  | "add_files"       // inject files into context
+  | "fix_loop"        // run build/test → fix errors → repeat
+  | "commit"          // generate message + git commit
+  | "pr"              // generate PR description
+  | "rollback"        // undo last file changes
+  | "copy_last"       // copy last response to clipboard
+  | "history"         // list saved sessions
+  | "resume_session"; // restore a saved session by index
 
 export interface SlashResult {
   action: SlashAction;
@@ -69,27 +78,36 @@ const HELP_TEXT = `
 
 **Files**
   /read <path>    Read a file and show its contents
-  /edit <path>    Open a file for editing (describe changes in next message)
-  /write <path>   Write a file (paste content in next message)
-  /diff           Show git diff
+  /add <glob>     Inject file(s) into context (e.g. /add src/**/*.ts)
+  /edit <path>    Open a file for editing
+  /write <path>   Write a new file
+  /rollback       Undo last file changes (from .atlas/backups/)
 
 **Code**
   /run <cmd>      Run a shell command
-  /test           Run tests (uses package.json test script)
-  /build          Run build (uses package.json build script)
+  /test           Run tests
+  /build          Run build
+  /fix [cmd]      Run tests/build → auto-fix errors → repeat (up to 5×)
 
 **Git**
   /git            Show git status
   /diff           Show git diff
   /review         Review staged changes
-  /commit-message Generate a commit message for staged changes
+  /commit         Generate commit message + git commit
+  /pr [base]      Generate PR description (default base: main)
 
-**Memory**
-  /memory         Show .atlas/memory.md content
-  /plan <goal>    Create a step-by-step plan for a goal
+**Memory & Sessions**
+  /memory         Show .atlas/memory.md
+  /memory save    Force immediate memory save
+  /copy           Copy last response to clipboard
+  /history        List saved sessions
+  /resume <n>     Restore session n from /history
+
+**Planning**
+  /plan <goal>    Create a step-by-step implementation plan
 
 **Analysis**
-  /security       Run a security-focused review of the current codebase
+  /security       Security review of the codebase
   /docs <path>    Generate documentation for a file
   /undo           Show recent tool actions (for manual undo)
 
@@ -232,6 +250,12 @@ export function handleSlashCommand(
       return { action: "run_tool", toolName: "read_file", toolArgs: { path: args } };
     }
 
+    // ── Add file(s) to context ────────────────────────────────────────────
+    case "add": {
+      if (!args) return { action: "print", text: "Usage: /add <file|glob>  — inject file(s) into context" };
+      return { action: "add_files", text: args };
+    }
+
     // ── List ──────────────────────────────────────────────────────────────
     case "ls":
     case "list": {
@@ -302,10 +326,64 @@ export function handleSlashCommand(
       return { action: "run_tool", toolName: "git_commit_message", toolArgs: {} };
     }
 
+    // ── Commit (generate message + actually commit) ───────────────────────
+    case "commit": {
+      return { action: "commit" };
+    }
+
+    // ── PR description ────────────────────────────────────────────────────
+    case "pr": {
+      const base = args || "main";
+      return {
+        action: "send",
+        text:
+          `Generate a pull request description for changes relative to \`${base}\`.\n` +
+          `1. Run: git log ${base}..HEAD --oneline\n` +
+          `2. Run: git diff ${base}..HEAD --stat\n` +
+          `3. Write a PR **title** (≤70 chars) and a description with these sections:\n` +
+          `   ## Summary (2–4 bullet points)\n` +
+          `   ## Changes (key files / what changed)\n` +
+          `   ## Testing (how to verify)\n` +
+          `Output only the PR text — no preamble.`,
+      };
+    }
+
+    // ── Fix loop ──────────────────────────────────────────────────────────
+    case "fix": {
+      // /fix             → auto-detect test/build command
+      // /fix cargo test  → use specified command
+      return { action: "fix_loop", text: args || "" };
+    }
+
+    // ── Rollback ──────────────────────────────────────────────────────────
+    case "rollback": {
+      return { action: "rollback" };
+    }
+
+    // ── Copy last response ────────────────────────────────────────────────
+    case "copy": {
+      return { action: "copy_last" };
+    }
+
+    // ── Session history ───────────────────────────────────────────────────
+    case "history": {
+      return { action: "history" };
+    }
+
+    // ── Resume session ────────────────────────────────────────────────────
+    case "resume": {
+      if (!args) return { action: "history" }; // no index → show list
+      return { action: "resume_session", text: args };
+    }
+
     // ── Memory ────────────────────────────────────────────────────────────
     case "memory": {
+      if (args === "save") {
+        // Force an immediate memory update regardless of turn count
+        return { action: "save_memory" };
+      }
       if (!ctx.workspace.hasMemoryMd) {
-        return { action: "print", text: "No .atlas/memory.md found. Run /init to create one." };
+        return { action: "print", text: "No .atlas/memory.md found. Run /init to create one.\nTip: memory is auto-saved every 3 turns, or use /memory save." };
       }
       return { action: "run_tool", toolName: "read_file", toolArgs: { path: ".atlas/memory.md" } };
     }

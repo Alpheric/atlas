@@ -140,6 +140,7 @@ export interface AgentLoopOptions {
   autoRoute?: boolean;
   onEvent: AgentEventHandler;
   maxTurns?: number;
+  signal?: AbortSignal;  // Esc-to-interrupt
 }
 
 // Pre-build the OpenAI tools array once — it never changes
@@ -155,6 +156,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
     audit,
     onEvent,
     maxTurns = 15,
+    signal,
   } = opts;
 
   let messages = [...opts.messages];
@@ -174,6 +176,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
   }
 
   for (let turn = 0; turn < maxTurns; turn++) {
+    // Check abort before each turn
+    if (signal?.aborted) {
+      await onEvent({ type: "done", usage: finalUsage });
+      break;
+    }
+
     let pendingToolCalls: NativeToolCall[] = [];
     let assistantText = "";
 
@@ -184,7 +192,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
         ...messages,
       ];
 
-      for await (const event of streamCompletion(config, fullMessages, OPENAI_TOOLS)) {
+      for await (const event of streamCompletion(config, fullMessages, OPENAI_TOOLS, signal)) {
         if (event.type === "text") {
           assistantText += event.content;
           await onEvent({ type: "chunk", text: event.content });
@@ -195,6 +203,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
         }
       }
     } catch (err: unknown) {
+      if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+        await onEvent({ type: "done", usage: finalUsage });
+        break;
+      }
       await onEvent({ type: "error", error: err instanceof Error ? err.message : String(err) });
       break;
     }
