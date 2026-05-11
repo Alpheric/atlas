@@ -20,7 +20,8 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { render, Box, Text, useApp, useInput } from "ink";
+import { render, Box, Text, Static, useApp, useInput } from "ink";
+import { Mascot } from "./components/Mascot.js";
 import Spinner from "ink-spinner";
 import meow from "meow";
 
@@ -388,57 +389,22 @@ function App({
   // Number of completed user→assistant turns (drives compact header threshold)
   const [turnCount, setTurnCount] = useState(0);
 
-  // ── Mascot — inline animation above status bar ───────────────────────────
-  const mTRef = useRef(0), mPRef = useRef(3);
-  const [mTick, setMTick] = useState(0);
-  const [mPos,  setMPos]  = useState(3);
-  const [mDir,  setMDir]  = useState(0);
-  const [mBlink, setMBlink] = useState(false);
-  const [mDone,  setMDone]  = useState(false);
+  // ── Mascot state for derived label only (animation lives in <Mascot/>) ─────
+  // The actual frame ticking happens INSIDE the Mascot component so it does
+  // not re-render the parent App tree on every animation frame (this was the
+  // primary flicker source).
+  const [mDone, setMDone] = useState(false);
   const prevLoadRef = useRef(false);
-
-  const mState = loading ? "thinking" : mDone ? "happy" : "idle";
+  const mState: "idle" | "thinking" | "happy" = loading ? "thinking" : mDone ? "happy" : "idle";
 
   useEffect(() => {
     if (prevLoadRef.current && !loading) {
       setMDone(true);
-      setTimeout(() => setMDone(false), 750);
+      const t = setTimeout(() => setMDone(false), 750);
+      return () => clearTimeout(t);
     }
     prevLoadRef.current = loading;
   }, [loading]);
-
-  useEffect(() => {
-    const ms = mState === "thinking" ? 100 : 140;
-    const id = setInterval(() => {
-      const t = ++mTRef.current, prev = mPRef.current;
-      const next = mState === "thinking" ? 3
-        : mState === "happy" ? 3 + (t % 4 < 2 ? 0 : 1)
-        : Math.round(3 + 3 * Math.sin(t * 0.09));
-      mPRef.current = next;
-      setMTick(t); setMPos(next); setMDir(next > prev ? 1 : next < prev ? -1 : 0);
-    }, ms);
-    mTRef.current = 0; mPRef.current = 3; setMPos(3); setMDir(0);
-    return () => clearInterval(id);
-  }, [mState]);
-
-  useEffect(() => {
-    if (mState !== "idle") { setMBlink(false); return; }
-    let alive = true, t1: ReturnType<typeof setTimeout>, t2: ReturnType<typeof setTimeout>;
-    const loop = () => { t1 = setTimeout(() => { if (!alive) return; setMBlink(true); t2 = setTimeout(() => { if (!alive) return; setMBlink(false); loop(); }, 110); }, 2000 + Math.random() * 3000); };
-    loop(); return () => { alive = false; clearTimeout(t1); clearTimeout(t2); };
-  }, [mState]);
-
-  const mTips  = ["✦","✧","·","✧"], mStars = ["★","✦","✧","·","✧","✦"], mDots = ["·  ","·· ","···","·· "];
-  const mFaces: Record<string,string> = { normal:"◕ω◕", blink:"─ω─", thinking:"●_●", happy:"^ω^", wink:"◕ω─" };
-  const mTip  = mTips[mTick % mTips.length] ?? "✦";
-  const mStar = mState === "happy" ? (mStars[mTick % mStars.length] ?? "★") : "★";
-  const mFKey = mState === "thinking" ? "thinking" : mState === "happy" ? "happy" : mBlink ? "blink" : mTick % 55 > 52 ? "wink" : "normal";
-  const mEyes = mFaces[mFKey] ?? "◕ω◕";
-  const mAL   = mDir === -1 ? "<" : " ", mAR = mDir === 1 ? ">" : " ";
-  const mPad  = " ".repeat(Math.max(0, mPos));
-  const mL1   = `${mPad}  ${mTip}◆${mTip}`;
-  const mL2   = `${mPad}${mAL}(${mEyes})${mAR}`;
-  const mL3   = mState === "thinking" ? `${mPad}  ${mDots[mTick % mDots.length] ?? "·  "}` : `${mPad}  ╘${mStar}╛`;
 
   // Detect git branch once on mount
   useEffect(() => {
@@ -1307,6 +1273,92 @@ function App({
   // Switch to compact header once the user has had their first turn
   const compactHeader = turnCount > 0 || events.some(e => e.kind === "user");
 
+  // ── Render one event item (used by both <Static> and the live tail) ────
+  // Each item is keyed by index because EventItem has no stable id; once an
+  // item is rendered in <Static> it is never re-rendered, so this is safe.
+  const renderEvent = (e: EventItem, i: number) => {
+    switch (e.kind) {
+      case "user":
+        return (
+          <Box key={`u-${i}`} flexDirection="column" marginTop={1} marginBottom={0}>
+            {i > 0 && (
+              <Text dimColor>{"─".repeat(process.stdout.columns ? Math.min(process.stdout.columns - 2, 80) : 60)}</Text>
+            )}
+            <Box gap={1} alignItems="flex-start">
+              <Text color="cyan" bold>▶</Text>
+              <Text color="cyan" bold>you</Text>
+            </Box>
+            <Box marginLeft={3}>
+              <Text>{e.text}</Text>
+            </Box>
+          </Box>
+        );
+      case "assistant":
+        return (
+          <Box key={`a-${i}`} flexDirection="column" marginTop={1} marginBottom={0}>
+            <Box gap={1} alignItems="flex-start">
+              <Text color="green" bold>◆</Text>
+              <Text color="green" bold>atlas</Text>
+              {e.streaming && <Text color="green" dimColor>…</Text>}
+            </Box>
+            <Box marginLeft={3} flexDirection="column">
+              {e.streaming ? (
+                <Text>
+                  {e.text || ""}
+                  <Text color="green">▌</Text>
+                </Text>
+              ) : (
+                <MarkdownRenderer content={e.text || ""} />
+              )}
+            </Box>
+          </Box>
+        );
+      case "tool":
+        return (
+          <Box key={`t-${i}`} marginLeft={3} marginTop={0}>
+            <ToolCallDisplay toolCall={e.toolCall} status={e.status} result={e.result} />
+          </Box>
+        );
+      case "diff":
+        return (
+          <Box key={`d-${i}`} marginLeft={2}>
+            <DiffViewer diff={e.diff} />
+          </Box>
+        );
+      case "system":
+        return (
+          <Box key={`s-${i}`} marginTop={1}>
+            <Text dimColor>ℹ {e.text}</Text>
+          </Box>
+        );
+      case "error":
+        return (
+          <Box key={`e-${i}`} marginTop={1}>
+            <Box borderStyle="round" borderColor="red" paddingX={1}>
+              <Text color="red" bold>✗ </Text>
+              <Text color="red">{e.text}</Text>
+            </Box>
+          </Box>
+        );
+    }
+    return null;
+  };
+
+  // ── Flicker fix: split events into "static" (frozen, written once via
+  //    Ink's <Static>) and "live" (the currently streaming assistant or a
+  //    tool whose status may still change). <Static> never repaints, so the
+  //    transcript no longer flickers when streaming chunks arrive. ──
+  let liveStart = events.length;
+  if (events.length > 0) {
+    const last = events[events.length - 1];
+    const isLive =
+      (last?.kind === "assistant" && last.streaming) ||
+      (last?.kind === "tool" && last.status === "running");
+    if (isLive) liveStart = events.length - 1;
+  }
+  const staticEvents = events.slice(0, liveStart);
+  const liveEvents   = events.slice(liveStart);
+
   return (
     <Box flexDirection="column">
       {/* ── Header: big banner on start, compact after first turn ── */}
@@ -1318,86 +1370,18 @@ function App({
         agentEnabled={agentEnabled}
       />
 
-      {/* ── Event log ── */}
+      {/* ── Static event log — written once per item, never repainted ── */}
+      <Static items={staticEvents.map((e, i) => ({ e, i }))}>
+        {({ e, i }) => (
+          <Box key={`st-${i}`} paddingX={1} flexDirection="column">
+            {renderEvent(e, i)}
+          </Box>
+        )}
+      </Static>
+
+      {/* ── Live tail — only the currently-streaming bubble re-renders ── */}
       <Box flexDirection="column" paddingX={1}>
-        {events.map((e, i) => {
-          switch (e.kind) {
-            case "user":
-              return (
-                <Box key={i} flexDirection="column" marginTop={1} marginBottom={0}>
-                  {/* Turn separator (not on the first user message) — full terminal width */}
-                  {i > 0 && (
-                    <Text dimColor>{"─".repeat(process.stdout.columns ? Math.min(process.stdout.columns - 2, 80) : 60)}</Text>
-                  )}
-                  <Box gap={1} alignItems="flex-start">
-                    <Text color="cyan" bold>▶</Text>
-                    <Text color="cyan" bold>you</Text>
-                  </Box>
-                  <Box marginLeft={3}>
-                    <Text>{e.text}</Text>
-                  </Box>
-                </Box>
-              );
-
-            case "assistant":
-              return (
-                <Box key={i} flexDirection="column" marginTop={1} marginBottom={0}>
-                  <Box gap={1} alignItems="flex-start">
-                    <Text color="green" bold>◆</Text>
-                    <Text color="green" bold>atlas</Text>
-                    {e.streaming && <Text color="green" dimColor>…</Text>}
-                  </Box>
-                  <Box marginLeft={3} flexDirection="column">
-                    {e.streaming ? (
-                      /* Plain text while streaming — avoids parsing partial markdown */
-                      <Text>
-                        {e.text || ""}
-                        <Text color="green">▌</Text>
-                      </Text>
-                    ) : (
-                      /* Full markdown render once complete */
-                      <MarkdownRenderer content={e.text || ""} />
-                    )}
-                  </Box>
-                </Box>
-              );
-
-            case "tool":
-              return (
-                <Box key={i} marginLeft={3} marginTop={0}>
-                  <ToolCallDisplay
-                    toolCall={e.toolCall}
-                    status={e.status}
-                    result={e.result}
-                  />
-                </Box>
-              );
-
-            case "diff":
-              return (
-                <Box key={i} marginLeft={2}>
-                  <DiffViewer diff={e.diff} />
-                </Box>
-              );
-
-            case "system":
-              return (
-                <Box key={i} marginTop={1}>
-                  <Text dimColor>ℹ {e.text}</Text>
-                </Box>
-              );
-
-            case "error":
-              return (
-                <Box key={i} marginTop={1}>
-                  <Box borderStyle="round" borderColor="red" paddingX={1}>
-                    <Text color="red" bold>✗ </Text>
-                    <Text color="red">{e.text}</Text>
-                  </Box>
-                </Box>
-              );
-          }
-        })}
+        {liveEvents.map((e, idx) => renderEvent(e, liveStart + idx))}
 
         {/* V3 — Thinking indicator: shown when loading but no streaming bubble yet */}
         {loading && !events.some(e => e.kind === "assistant" && e.streaming) && (
@@ -1435,14 +1419,10 @@ function App({
         />
       )}
 
-      {/* ── Mascot — only in empty/welcome state, hidden once chat starts ── */}
-      {events.length === 0 && (
-        <>
-          <Text color="greenBright" bold>{mL1}</Text>
-          <Text color="green"       bold>{mL2}</Text>
-          <Text color="cyan"        bold>{mL3}</Text>
-        </>
-      )}
+      {/* ── Mascot — only in empty/welcome state; its animation timer
+           lives inside the component so re-renders are isolated and do
+           NOT cause the whole app tree to flicker. ── */}
+      {events.length === 0 && <Mascot state={mState} />}
 
       {/* ── Status bar ── */}
       <StatusBar
