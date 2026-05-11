@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Atlas — Enterprise AI by Alpheric</title>
+  <meta name="description" content="Atlas is Alpheric's enterprise AI middleware platform. Seven specialized models, a powerful CLI, and a full agentic stack — built to route, learn, and scale." />
+  <meta property="og:title" content="Atlas — Enterprise AI by Alpheric" />
+  <meta property="og:description" content="Seven specialized AI models. One unified platform. Built for enterprise teams." />
+  <meta property="og:type" content="website" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #060a0f;
+      --bg2:          #0b1018;
+      --bg3:          #111820;
+      --bg4:          #181f28;
+      --bg5:          #1c2430;
+      --border:       #1e2733;
+      --border-hi:    #2a3545;
+      --text:         #e2eaf3;
+      --text-2:       #8b9ab0;
+      --text-3:       #5a6a7e;
+
+      --cyan:         #38bdf8;
+      --cyan-dim:     #0ea5e9;
+      --cyan-glow:    rgba(56,189,248,.14);
+      --blue:         #6366f1;
+      --blue-glow:    rgba(99,102,241,.14);
+      --magenta:      #c084fc;
+      --magenta-glow: rgba(192,132,252,.14);
+      --green:        #4ade80;
+      --green-glow:   rgba(74,222,128,.12);
+      --red:          #f87171;
+      --orange:       #fb923c;
+      --yellow:       #fbbf24;
+      --teal:         #2dd4bf;
+
+      --radius:       12px;
+      --radius-lg:    18px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* ─── Scrollbar ─────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg2); }
+    ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+
+    /* ─── Selection ─────────────────────────────────────── */
+    ::selection { background: rgba(56,189,248,.25); }
+
+    /* ─── Nav ───────────────────────────────────────────── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      height: 60px;
+      display: flex; align-items: center;
+      padding: 0 clamp(16px, 5vw, 48px);
+      background: rgba(6,10,15,.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      text-decoration: none; color: var(--text);
+      font-weight: 700; font-size: 1.05rem; letter-spacing: -.3px;
+      flex-shrink: 0;
+    }
+
+    .nav-logo-mark {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: linear-gradient(135deg, var(--cyan-dim), var(--blue));
+      display: flex; align-items: center; justify-content: center;
+      font-size: .8rem; font-weight: 900; color: #fff;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .nav-links {
+      display: flex; align-items: center; gap: 6px;
+      margin-left: auto;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-2); text-decoration: none; font-size: .875rem;
+      padding: 6px 12px; border-radius: 6px; transition: color .15s, background .15s;
+    }
+    .nav-links a:hover { color: var(--text); background: var(--bg3); }
+
+    .nav-cta {
+      margin-left: 8px;
+      background: var(--cyan-dim) !important;
+      color: #fff !important; font-weight: 600 !important;
+      border-radius: 8px !important;
+      padding: 6px 16px !important;
+      transition: opacity .15s !important;
+    }
+    .nav-cta:hover { opacity: .85 !important; background: var(--cyan-dim) !important; }
+
+    /* ─── Hero ───────────────────────────────────────────── */
+    .hero {
+      min-height: 100vh;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 80px clamp(16px, 5vw, 48px) 80px;
+      text-align: center;
+      position: relative; overflow: hidden;
+    }
+
+    /* Radial background glow */
+    .hero::before {
+      content: '';
+      position: absolute; top: -10%; left: 50%; transform: translateX(-50%);
+      width: 900px; height: 600px;
+      background: radial-gradient(ellipse at center,
+        rgba(99,102,241,.18) 0%,
+        rgba(56,189,248,.10) 40%,
+        transparent 70%);
+      pointer-events: none;
+    }
+
+    /* Grid dots */
+    .hero::after {
+      content: '';
+      position: absolute; inset: 0;
+      background-image:
+        radial-gradient(circle, rgba(255,255,255,.04) 1px, transparent 1px);
+      background-size: 32px 32px;
+      pointer-events: none;
+      mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 0%, transparent 80%);
+    }
+
+    .hero-eyebrow {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--bg3); border: 1px solid var(--border-hi);
+      border-radius: 999px; padding: 5px 14px;
+      font-size: .78rem; font-weight: 500; color: var(--text-2);
+      margin-bottom: 28px; position: relative; z-index: 1;
+    }
+    .hero-eyebrow .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--cyan); box-shadow: 0 0 6px var(--cyan);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    .hero-headline {
+      font-size: clamp(2.8rem, 7vw, 6rem);
+      font-weight: 900; line-height: 1.05; letter-spacing: -2px;
+      position: relative; z-index: 1;
+    }
+
+    .hero-headline .word-atlas {
+      background: linear-gradient(135deg, #fff 0%, var(--cyan) 50%, var(--blue) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-sub {
+      margin-top: 20px;
+      font-size: clamp(1rem, 2.5vw, 1.25rem);
+      color: var(--text-2); max-width: 580px;
+      position: relative; z-index: 1;
+    }
+
+    .hero-ctas {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
+      margin-top: 40px; position: relative; z-index: 1;
+    }
+
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: linear-gradient(135deg, var(--cyan-dim), var(--blue));
+      color: #fff; font-weight: 600; font-size: .925rem;
+      padding: 11px 26px; border-radius: 10px; text-decoration: none;
+      border: none; cursor: pointer;
+      transition: transform .15s, box-shadow .15s, opacity .15s;
+      box-shadow: 0 0 28px rgba(56,189,248,.25);
+    }
+    .btn-primary:hover { transform: translateY(-1px); opacity: .9; box-shadow: 0 4px 32px rgba(56,189,248,.35); }
+
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--bg3); color: var(--text);
+      border: 1px solid var(--border-hi); font-weight: 600; font-size: .925rem;
+      padding: 11px 26px; border-radius: 10px; text-decoration: none;
+      transition: background .15s, border-color .15s, transform .15s;
+    }
+    .btn-secondary:hover { background: var(--bg4); border-color: var(--border-hi); transform: translateY(-1px); }
+
+    .hero-stats {
+      display: flex; align-items: center; gap: 32px; flex-wrap: wrap; justify-content: center;
+      margin-top: 56px; position: relative; z-index: 1;
+    }
+
+    .stat {
+      text-align: center;
+    }
+    .stat-val {
+      font-size: 1.8rem; font-weight: 800; letter-spacing: -1px;
+      background: linear-gradient(135deg, var(--text), var(--cyan));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+    .stat-label { font-size: .78rem; color: var(--text-3); margin-top: 2px; text-transform: uppercase; letter-spacing: .5px; }
+
+    .stat-divider { width: 1px; height: 36px; background: var(--border); }
+
+    /* ─── Section wrapper ──────────────────────────────── */
+    section {
+      padding: 80px clamp(16px, 5vw, 48px);
+      max-width: 1180px; margin: 0 auto;
+    }
+
+    .section-label {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px;
+      color: var(--cyan); margin-bottom: 12px;
+    }
+    .section-label::before {
+      content: ''; width: 14px; height: 2px; background: var(--cyan); border-radius: 1px;
+    }
+
+    .section-title {
+      font-size: clamp(1.75rem, 4vw, 2.75rem);
+      font-weight: 800; letter-spacing: -1px; line-height: 1.15;
+      margin-bottom: 14px;
+    }
+
+    .section-sub {
+      font-size: 1.05rem; color: var(--text-2); max-width: 520px; line-height: 1.7;
+      margin-bottom: 52px;
+    }
+
+    /* ─── Models grid ──────────────────────────────────── */
+    .models-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    .model-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      position: relative; overflow: hidden;
+      transition: border-color .2s, transform .2s, box-shadow .2s;
+      cursor: default;
+    }
+
+    .model-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: var(--model-color, var(--cyan));
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    }
+
+    .model-card:hover {
+      border-color: var(--border-hi);
+      transform: translateY(-3px);
+      box-shadow: 0 12px 40px rgba(0,0,0,.4), 0 0 0 1px var(--border-hi);
+    }
+
+    /* Glow on hover */
+    .model-card::after {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(circle at 60% 30%, var(--model-glow, rgba(56,189,248,.06)) 0%, transparent 70%);
+      opacity: 0; transition: opacity .2s;
+      pointer-events: none;
+    }
+    .model-card:hover::after { opacity: 1; }
+
+    .model-icon {
+      width: 44px; height: 44px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.2rem;
+      background: var(--model-bg, rgba(56,189,248,.1));
+      border: 1px solid var(--model-border, rgba(56,189,248,.2));
+      margin-bottom: 16px;
+    }
+
+    .model-name {
+      font-size: .8rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1px; color: var(--model-color, var(--cyan));
+      margin-bottom: 4px; font-family: 'JetBrains Mono', monospace;
+    }
+
+    .model-title {
+      font-size: 1.05rem; font-weight: 700; color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .model-desc {
+      font-size: .875rem; color: var(--text-2); line-height: 1.6;
+    }
+
+    .model-tags {
+      display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px;
+    }
+
+    .model-tag {
+      font-size: .72rem; font-weight: 500;
+      background: var(--bg4); border: 1px solid var(--border);
+      color: var(--text-3); border-radius: 4px; padding: 2px 8px;
+    }
+
+    /* model color variants */
+    .mc-code  { --model-color: #38bdf8; --model-glow: rgba(56,189,248,.08); --model-bg: rgba(56,189,248,.08); --model-border: rgba(56,189,248,.2); }
+    .mc-plan  { --model-color: #c084fc; --model-glow: rgba(192,132,252,.08); --model-bg: rgba(192,132,252,.08); --model-border: rgba(192,132,252,.2); }
+    .mc-secure{ --model-color: #f87171; --model-glow: rgba(248,113,113,.08); --model-bg: rgba(248,113,113,.08); --model-border: rgba(248,113,113,.2); }
+    .mc-infra { --model-color: #fb923c; --model-glow: rgba(251,146,60,.08); --model-bg: rgba(251,146,60,.08); --model-border: rgba(251,146,60,.2); }
+    .mc-data  { --model-color: #fbbf24; --model-glow: rgba(251,191,36,.08); --model-bg: rgba(251,191,36,.08); --model-border: rgba(251,191,36,.2); }
+    .mc-books { --model-color: #4ade80; --model-glow: rgba(74,222,128,.08); --model-bg: rgba(74,222,128,.08); --model-border: rgba(74,222,128,.2); }
+    .mc-audit { --model-color: #2dd4bf; --model-glow: rgba(45,212,191,.08); --model-bg: rgba(45,212,191,.08); --model-border: rgba(45,212,191,.2); }
+
+    /* ─── Divider ───────────────────────────────────────── */
+    .section-divider {
+      width: 100%; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border), transparent);
+      margin: 0 auto;
+    }
+
+    /* ─── Products ──────────────────────────────────────── */
+    .products-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 24px;
+    }
+
+    .product-card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 36px 32px;
+      position: relative; overflow: hidden;
+      transition: border-color .2s, transform .2s, box-shadow .2s;
+      display: flex; flex-direction: column;
+    }
+
+    .product-card:hover:not(.coming-soon) {
+      border-color: var(--border-hi);
+      transform: translateY(-3px);
+      box-shadow: 0 16px 48px rgba(0,0,0,.4);
+    }
+
+    .product-card.coming-soon {
+      opacity: .65;
+    }
+
+    .product-card.featured::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse at 30% 20%, rgba(56,189,248,.07) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    .product-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+      padding: 3px 10px; border-radius: 999px;
+      margin-bottom: 24px; align-self: flex-start;
+    }
+
+    .badge-available { background: rgba(74,222,128,.12); color: var(--green); border: 1px solid rgba(74,222,128,.25); }
+    .badge-soon { background: var(--bg4); color: var(--text-3); border: 1px solid var(--border); }
+
+    .product-icon {
+      font-size: 2.2rem; margin-bottom: 16px; line-height: 1;
+    }
+
+    .product-name {
+      font-size: 1.5rem; font-weight: 800; letter-spacing: -.5px;
+      margin-bottom: 10px;
+    }
+
+    .product-desc {
+      font-size: .95rem; color: var(--text-2); line-height: 1.7;
+      margin-bottom: 28px; flex: 1;
+    }
+
+    .product-features {
+      list-style: none; margin-bottom: 32px; display: flex; flex-direction: column; gap: 8px;
+    }
+
+    .product-features li {
+      display: flex; align-items: center; gap: 10px;
+      font-size: .875rem; color: var(--text-2);
+    }
+
+    .product-features li::before {
+      content: ''; width: 5px; height: 5px; border-radius: 50%;
+      background: var(--cyan); flex-shrink: 0;
+      box-shadow: 0 0 5px var(--cyan);
+    }
+
+    .product-actions {
+      display: flex; gap: 10px; flex-wrap: wrap;
+    }
+
+    .btn-sm {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: .875rem; font-weight: 600; padding: 9px 20px;
+      border-radius: 8px; text-decoration: none; border: none; cursor: pointer;
+      transition: transform .15s, opacity .15s;
+    }
+    .btn-sm:hover { transform: translateY(-1px); opacity: .9; }
+
+    .btn-sm-primary {
+      background: linear-gradient(135deg, var(--cyan-dim), var(--blue));
+      color: #fff;
+      box-shadow: 0 0 20px rgba(56,189,248,.2);
+    }
+
+    .btn-sm-ghost {
+      background: var(--bg4); color: var(--text-2);
+      border: 1px solid var(--border-hi);
+    }
+    .btn-sm-ghost:hover { color: var(--text); }
+
+    .btn-sm-disabled {
+      background: var(--bg4); color: var(--text-3);
+      border: 1px solid var(--border);
+      cursor: not-allowed !important;
+      opacity: .7 !important;
+    }
+    .btn-sm-disabled:hover { transform: none !important; }
+
+    /* Terminal preview block */
+    .terminal {
+      background: var(--bg);
+      border: 1px solid var(--border-hi);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-top: 0;
+    }
+
+    .terminal-bar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 10px 14px;
+      background: var(--bg3);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .terminal-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .td-red { background: #ff5f57; }
+    .td-yellow { background: #ffbd2e; }
+    .td-green { background: #28c840; }
+
+    .terminal-title {
+      font-size: .72rem; color: var(--text-3); font-family: 'JetBrains Mono', monospace;
+      margin-left: 6px;
+    }
+
+    .terminal-body {
+      padding: 18px 20px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .8rem; line-height: 1.75;
+    }
+
+    .t-prompt { color: var(--text-3); }
+    .t-cmd    { color: var(--text); }
+    .t-info   { color: var(--cyan); }
+    .t-green  { color: var(--green); }
+    .t-dim    { color: var(--text-3); }
+    .t-caret  {
+      display: inline-block; width: 8px; height: 14px;
+      background: var(--cyan); vertical-align: -2px;
+      animation: blink 1.1s step-end infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    /* ─── Architecture strip ───────────────────────────── */
+    .arch-strip {
+      background: var(--bg2);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 56px clamp(16px, 5vw, 48px);
+    }
+
+    .arch-inner {
+      max-width: 1180px; margin: 0 auto;
+    }
+
+    .arch-flow {
+      display: flex; align-items: center; justify-content: center; gap: 0;
+      flex-wrap: wrap; margin-top: 44px;
+    }
+
+    .arch-node {
+      background: var(--bg3);
+      border: 1px solid var(--border-hi);
+      border-radius: 12px;
+      padding: 16px 22px;
+      text-align: center; min-width: 120px;
+    }
+
+    .arch-node-icon { font-size: 1.4rem; margin-bottom: 6px; }
+    .arch-node-name { font-size: .78rem; font-weight: 700; color: var(--text); }
+    .arch-node-sub  { font-size: .68rem; color: var(--text-3); margin-top: 2px; }
+
+    .arch-arrow {
+      display: flex; align-items: center; padding: 0 10px; color: var(--border-hi); font-size: 1.1rem;
+    }
+
+    /* ─── CTA banner ────────────────────────────────────── */
+    .cta-banner {
+      background: linear-gradient(135deg, rgba(56,189,248,.06) 0%, rgba(99,102,241,.08) 50%, rgba(192,132,252,.06) 100%);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 72px clamp(16px, 5vw, 48px);
+      text-align: center;
+      position: relative; overflow: hidden;
+    }
+
+    .cta-banner::before {
+      content: '';
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+      width: 600px; height: 400px;
+      background: radial-gradient(ellipse, rgba(99,102,241,.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .cta-banner h2 {
+      font-size: clamp(1.75rem, 4vw, 2.5rem);
+      font-weight: 800; letter-spacing: -1px;
+      position: relative; z-index: 1; margin-bottom: 12px;
+    }
+
+    .cta-banner p {
+      color: var(--text-2); font-size: 1rem; margin-bottom: 36px;
+      position: relative; z-index: 1;
+    }
+
+    .cta-banner .ctas { position: relative; z-index: 1; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+    /* ─── Footer ────────────────────────────────────────── */
+    footer {
+      padding: 40px clamp(16px, 5vw, 48px);
+      border-top: 1px solid var(--border);
+      background: var(--bg2);
+    }
+
+    .footer-inner {
+      max-width: 1180px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 20px; flex-wrap: wrap;
+    }
+
+    .footer-brand {
+      display: flex; align-items: center; gap: 10px;
+      font-size: .875rem; color: var(--text-3);
+    }
+
+    .footer-logo-mark {
+      width: 24px; height: 24px; border-radius: 6px;
+      background: linear-gradient(135deg, var(--cyan-dim), var(--blue));
+      display: flex; align-items: center; justify-content: center;
+      font-size: .65rem; font-weight: 900; color: #fff;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .footer-links {
+      display: flex; gap: 20px; list-style: none;
+    }
+
+    .footer-links a {
+      font-size: .825rem; color: var(--text-3); text-decoration: none;
+      transition: color .15s;
+    }
+    .footer-links a:hover { color: var(--text-2); }
+
+    /* ─── Animations ─────────────────────────────────────── */
+    .fade-up { opacity: 1; transform: translateY(0); }
+    .fade-up.animated {
+      opacity: 0; transform: translateY(24px);
+      animation: fadeUp .55s ease forwards;
+    }
+    @keyframes fadeUp {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .reveal {
+      opacity: 0; transform: translateY(20px);
+      transition: opacity .55s ease, transform .55s ease;
+    }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    .delay-1 { animation-delay: .08s; }
+    .delay-2 { animation-delay: .16s; }
+    .delay-3 { animation-delay: .24s; }
+    .delay-4 { animation-delay: .32s; }
+
+    /* ─── Responsive ────────────────────────────────────── */
+    @media (max-width: 640px) {
+      .hero-stats { gap: 20px; }
+      .stat-divider { display: none; }
+      .arch-flow { gap: 10px; }
+      .arch-arrow { display: none; }
+      .models-grid { grid-template-columns: 1fr; }
+      .products-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════ NAV ═══════════════════════════════════ -->
+<nav>
+  <a href="/" class="nav-logo">
+    <div class="nav-logo-mark">A</div>
+    <span>Atlas</span>
+    <span style="color:var(--text-3);font-weight:400;font-size:.8rem;margin-left:2px">by Alpheric</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#models">Models</a></li>
+    <li><a href="#products">Products</a></li>
+    <li><a href="/cli">CLI Docs</a></li>
+    <li><a href="/login" class="nav-cta">Dashboard →</a></li>
+  </ul>
+</nav>
+
+<!-- ═══════════════ HERO ══════════════════════════════════ -->
+<div class="hero">
+  <div class="hero-eyebrow fade-up">
+    <span class="dot"></span>
+    Enterprise AI Middleware Platform
+  </div>
+
+  <h1 class="hero-headline fade-up delay-1">
+    Meet&nbsp;<span class="word-atlas">Atlas</span><br>by&nbsp;Alpheric
+  </h1>
+
+  <p class="hero-sub fade-up delay-2">
+    Seven specialized AI models, a powerful CLI, and a full agentic routing stack — built to learn, adapt, and scale with your team.
+  </p>
+
+  <div class="hero-ctas fade-up delay-3">
+    <a href="/cli" class="btn-primary">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      Install Atlas CLI
+    </a>
+    <a href="/login" class="btn-secondary">
+      Open Dashboard
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+    </a>
+  </div>
+
+  <div class="hero-stats fade-up delay-4">
+    <div class="stat">
+      <div class="stat-val">7</div>
+      <div class="stat-label">Specialized Models</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat">
+      <div class="stat-val">∞</div>
+      <div class="stat-label">Self-learning</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat">
+      <div class="stat-val">0ms</div>
+      <div class="stat-label">Cold-start target</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat">
+      <div class="stat-val">100%</div>
+      <div class="stat-label">On-premise capable</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ HOW IT WORKS ══════════════════════════ -->
+<div class="arch-strip">
+  <div class="arch-inner">
+    <div class="section-label">Architecture</div>
+    <h2 class="section-title" style="max-width:500px">Route once. Learn forever.</h2>
+    <p style="color:var(--text-2);font-size:.95rem;max-width:520px;line-height:1.7">
+      Every request flows through the CorePipeline — classified, cached, and distilled. Claude teaches local Ollama models in the background until they're ready to lead.
+    </p>
+    <div class="arch-flow reveal">
+      <div class="arch-node">
+        <div class="arch-node-icon">💬</div>
+        <div class="arch-node-name">Request</div>
+        <div class="arch-node-sub">Any client</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node">
+        <div class="arch-node-icon">🧭</div>
+        <div class="arch-node-name">Router</div>
+        <div class="arch-node-sub">Classify + route</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node">
+        <div class="arch-node-icon">🎓</div>
+        <div class="arch-node-name">Teacher</div>
+        <div class="arch-node-sub">Claude CLI</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node">
+        <div class="arch-node-icon">🤖</div>
+        <div class="arch-node-name">Student</div>
+        <div class="arch-node-sub">Local Ollama</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node">
+        <div class="arch-node-icon">📈</div>
+        <div class="arch-node-name">Fine-tune</div>
+        <div class="arch-node-sub">Auto QLoRA</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ MODELS ════════════════════════════════ -->
+<section id="models">
+  <div class="section-label">Atlas Models</div>
+  <h2 class="section-title">Seven minds. One platform.</h2>
+  <p class="section-sub">Each Atlas model is purpose-built for a specific domain, routes to the best local model, and trains itself to serve you faster over time.</p>
+
+  <div class="models-grid">
+
+    <!-- atlas-code -->
+    <div class="model-card mc-code reveal">
+      <div class="model-icon">💻</div>
+      <div class="model-name">atlas-code</div>
+      <div class="model-title">Code & Engineering</div>
+      <div class="model-desc">Full-stack development, code review, refactoring, and debugging with deep context awareness across your entire codebase.</div>
+      <div class="model-tags">
+        <span class="model-tag">TypeScript</span>
+        <span class="model-tag">Python</span>
+        <span class="model-tag">Refactor</span>
+        <span class="model-tag">Debug</span>
+      </div>
+    </div>
+
+    <!-- atlas-plan -->
+    <div class="model-card mc-plan reveal">
+      <div class="model-icon">🧭</div>
+      <div class="model-name">atlas-plan</div>
+      <div class="model-title">Planning & Strategy</div>
+      <div class="model-desc">CEO of the agent hierarchy. Breaks goals into subtasks, assigns work to the right specialist, and synthesizes results into coherent plans.</div>
+      <div class="model-tags">
+        <span class="model-tag">Roadmaps</span>
+        <span class="model-tag">Agents</span>
+        <span class="model-tag">Decisions</span>
+      </div>
+    </div>
+
+    <!-- atlas-secure -->
+    <div class="model-card mc-secure reveal">
+      <div class="model-icon">🔐</div>
+      <div class="model-name">atlas-secure</div>
+      <div class="model-title">Security & Compliance</div>
+      <div class="model-desc">Threat modelling, vulnerability triage, secure architecture review, and compliance auditing for SOC 2, ISO 27001, and GDPR.</div>
+      <div class="model-tags">
+        <span class="model-tag">CVE</span>
+        <span class="model-tag">SOC 2</span>
+        <span class="model-tag">Pentest</span>
+      </div>
+    </div>
+
+    <!-- atlas-infra -->
+    <div class="model-card mc-infra reveal">
+      <div class="model-icon">⚙️</div>
+      <div class="model-name">atlas-infra</div>
+      <div class="model-title">Infrastructure & DevOps</div>
+      <div class="model-desc">Terraform, Kubernetes, CI/CD pipelines, Docker, and cloud architecture. Writes IaC that actually deploys on the first try.</div>
+      <div class="model-tags">
+        <span class="model-tag">Terraform</span>
+        <span class="model-tag">K8s</span>
+        <span class="model-tag">CI/CD</span>
+      </div>
+    </div>
+
+    <!-- atlas-data -->
+    <div class="model-card mc-data reveal">
+      <div class="model-icon">📊</div>
+      <div class="model-name">atlas-data</div>
+      <div class="model-title">Data & Analytics</div>
+      <div class="model-desc">SQL, Python analytics, ML pipelines, data modelling, and business intelligence. Translates raw data into actionable insight.</div>
+      <div class="model-tags">
+        <span class="model-tag">SQL</span>
+        <span class="model-tag">Pandas</span>
+        <span class="model-tag">BI</span>
+      </div>
+    </div>
+
+    <!-- atlas-books -->
+    <div class="model-card mc-books reveal">
+      <div class="model-icon">✍️</div>
+      <div class="model-name">atlas-books</div>
+      <div class="model-title">Writing & Content</div>
+      <div class="model-desc">Technical documentation, blog posts, release notes, proposals, and long-form content. Clear, precise, and on-brand.</div>
+      <div class="model-tags">
+        <span class="model-tag">Docs</span>
+        <span class="model-tag">Content</span>
+        <span class="model-tag">Copywriting</span>
+      </div>
+    </div>
+
+    <!-- atlas-audit -->
+    <div class="model-card mc-audit reveal">
+      <div class="model-icon">📋</div>
+      <div class="model-name">atlas-audit</div>
+      <div class="model-title">Audit & Governance</div>
+      <div class="model-desc">Policy review, risk registers, vendor assessments, and regulatory mapping. The compliance expert on call, 24/7.</div>
+      <div class="model-tags">
+        <span class="model-tag">Risk</span>
+        <span class="model-tag">Governance</span>
+        <span class="model-tag">GDPR</span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ═══════════════ PRODUCTS ══════════════════════════════ -->
+<section id="products">
+  <div class="section-label">Products</div>
+  <h2 class="section-title">Built for every workflow.</h2>
+  <p class="section-sub">Atlas meets you where you work — inside your terminal today, and natively on every platform soon.</p>
+
+  <div class="products-grid">
+
+    <!-- Atlas CLI -->
+    <div class="product-card featured reveal">
+      <span class="product-badge badge-available">
+        <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><circle cx="4" cy="4" r="4"/></svg>
+        Available now
+      </span>
+
+      <div class="product-icon">⌨️</div>
+      <div class="product-name">Atlas CLI</div>
+      <div class="product-desc">
+        A powerful agentic terminal assistant. Reads your files, writes code, runs shell commands, and maintains full session memory — all from one keystroke.
+      </div>
+
+      <ul class="product-features">
+        <li>All 7 Atlas models in one command</li>
+        <li>Full file-system read &amp; write access</li>
+        <li>Session memory across conversations</li>
+        <li>Auto-updates via install script</li>
+        <li>macOS · Linux · Windows</li>
+      </ul>
+
+      <div class="terminal" style="margin-bottom:28px">
+        <div class="terminal-bar">
+          <div class="terminal-dot td-red"></div>
+          <div class="terminal-dot td-yellow"></div>
+          <div class="terminal-dot td-green"></div>
+          <span class="terminal-title">~ bash</span>
+        </div>
+        <div class="terminal-body">
+          <div><span class="t-dim"># one-line install</span></div>
+          <div><span class="t-prompt">$ </span><span class="t-cmd">curl -fsSL https://atlas.alpheric.ai/install.sh | bash</span></div>
+          <div style="margin-top:6px"><span class="t-green">✓</span> <span class="t-info">Atlas CLI installed — v1.0.0</span></div>
+          <div><span class="t-green">✓</span> <span class="t-dim">Added to PATH</span></div>
+          <div style="margin-top:6px"><span class="t-prompt">$ </span><span class="t-cmd">atlas "refactor this auth module"</span></div>
+          <div><span class="t-dim">atlas &gt; atlas-code | reading 12 files...</span><span class="t-caret"></span></div>
+        </div>
+      </div>
+
+      <div class="product-actions">
+        <a href="/cli" class="btn-sm btn-sm-primary">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          Get started
+        </a>
+        <a href="/cli#install" class="btn-sm btn-sm-ghost">View docs</a>
+      </div>
+    </div>
+
+    <!-- Atlas App -->
+    <div class="product-card coming-soon reveal">
+      <span class="product-badge badge-soon">Coming soon</span>
+
+      <div class="product-icon">🖥️</div>
+      <div class="product-name">Atlas App</div>
+      <div class="product-desc">
+        A native desktop and mobile application. A beautiful chat interface, project workspaces, and team collaboration — all backed by the same Atlas model family.
+      </div>
+
+      <ul class="product-features">
+        <li>Native macOS, Windows &amp; iOS apps</li>
+        <li>Team workspaces &amp; shared sessions</li>
+        <li>Visual agent workflow builder</li>
+        <li>Model training dashboard</li>
+        <li>Enterprise SSO &amp; audit logs</li>
+      </ul>
+
+      <div style="
+        background: var(--bg3); border: 1px solid var(--border);
+        border-radius: 10px; padding: 24px; text-align: center;
+        margin-bottom: 28px; position: relative; overflow: hidden;
+      ">
+        <div style="font-size:2.4rem;margin-bottom:10px">🔜</div>
+        <div style="font-size:.875rem;font-weight:600;color:var(--text-2)">Atlas App</div>
+        <div style="font-size:.78rem;color:var(--text-3);margin-top:4px">Launching 2026 · Join the waitlist</div>
+        <div style="
+          position:absolute;inset:0;
+          background:repeating-linear-gradient(
+            45deg,
+            transparent,transparent 10px,
+            rgba(255,255,255,.015) 10px,rgba(255,255,255,.015) 20px
+          );
+        "></div>
+      </div>
+
+      <div class="product-actions">
+        <button class="btn-sm btn-sm-disabled" disabled>
+          Notify me when ready
+        </button>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ═══════════════ CTA BANNER ════════════════════════════ -->
+<div class="cta-banner">
+  <h2>Ready to ship faster with AI?</h2>
+  <p>Install Atlas CLI in 30 seconds and bring every specialist model into your terminal.</p>
+  <div class="ctas">
+    <a href="/cli" class="btn-primary">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      Install Atlas CLI
+    </a>
+    <a href="/login" class="btn-secondary">Open Dashboard →</a>
+  </div>
+</div>
+
+<!-- ═══════════════ FOOTER ════════════════════════════════ -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <div class="footer-logo-mark">A</div>
+      <span>© 2026 Alpheric AI. All rights reserved.</span>
+    </div>
+    <ul class="footer-links">
+      <li><a href="/cli">CLI</a></li>
+      <li><a href="#models">Models</a></li>
+      <li><a href="/login">Dashboard</a></li>
+      <li><a href="mailto:neeraj@alpheric.com">Contact</a></li>
+    </ul>
+  </div>
+</footer>
+
+<script>
+  // Hero entrance animations — trigger after first paint
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.fade-up').forEach((el, i) => {
+      setTimeout(() => el.classList.add('animated'), i * 0);
+    });
+  });
+
+  // Scroll reveal
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('visible');
+        io.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.12 });
+
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+  // Smooth active nav link highlight
+  const sections = document.querySelectorAll('section[id], div[id]');
+  const navLinks = document.querySelectorAll('.nav-links a');
+
+  const sectionObserver = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        navLinks.forEach(a => {
+          a.style.color = '';
+          if (a.getAttribute('href') === '#' + e.target.id) {
+            a.style.color = 'var(--text)';
+          }
+        });
+      }
+    });
+  }, { rootMargin: '-40% 0px -55% 0px' });
+
+  sections.forEach(s => sectionObserver.observe(s));
+</script>
+</body>
+</html>

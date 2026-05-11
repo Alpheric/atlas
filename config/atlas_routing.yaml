@@ -1,0 +1,253 @@
+# Atlas Routing Policy v2
+# Single source of truth for all Atlas model routing decisions.
+# Loaded once at startup; changes require server restart.
+#
+# Task types:
+#   general | planning | reasoning | coding | debugging | security |
+#   infra | data | documents | embeddings | long_context | low_cost_background
+#
+# Routing modes:
+#   quality      — best model regardless of cost
+#   balanced     — atlas internal first, external fallback
+#   low_cost     — prefer cheap/local models
+#   local_first  — try atlas internal, escalate only on low confidence
+
+# ─── Primary routing table ────────────────────────────────────────────────────
+# primary: first model to try
+# fallbacks: ordered list tried on failure/unavailability
+# shadow: which atlas model learns from this request in background
+# provider_hint: preferred provider (informational, not enforced)
+
+tasks:
+  general:
+    primary: atlas-plan
+    fallbacks:
+      - gemini-2.5-flash
+      - llama3.2:latest
+    shadow: atlas-plan
+    provider_hint: claude-cli
+
+  planning:
+    primary: atlas-plan
+    fallbacks:
+      - gemini-2.5-flash
+      - claude-sonnet-4-20250514
+    shadow: atlas-plan
+    provider_hint: claude-cli
+
+  reasoning:
+    primary: claude-sonnet-4-20250514
+    fallbacks:
+      - gemini-2.5-pro
+      - gemini-2.5-flash
+    shadow: atlas-plan
+    provider_hint: claude-cli
+
+  deep_strategy:
+    primary: claude-opus-4-20250514
+    fallbacks:
+      - claude-sonnet-4-20250514
+      - gemini-2.5-pro
+    shadow: atlas-plan
+    provider_hint: claude-cli
+
+  coding:
+    primary: claude-sonnet-4-20250514
+    fallbacks:
+      - gemini-2.5-pro
+      - qwen2.5-coder:7b
+    shadow: atlas-code
+    provider_hint: claude-cli
+
+  private_coding:
+    primary: atlas-code
+    fallbacks:
+      - qwen2.5-coder:7b
+      - deepseek-coder:6.7b
+    shadow: atlas-code
+    provider_hint: ollama
+
+  debugging:
+    primary: claude-sonnet-4-20250514
+    fallbacks:
+      - gemini-2.5-pro
+      - qwen2.5-coder:7b
+    shadow: atlas-code
+    provider_hint: claude-cli
+
+  security:
+    primary: atlas-secure
+    fallbacks:
+      - claude-sonnet-4-20250514
+      - gemini-2.5-pro
+    shadow: atlas-secure
+    provider_hint: claude-cli
+
+  infra:
+    primary: atlas-infra
+    fallbacks:
+      - claude-sonnet-4-20250514
+      - gemini-2.5-flash
+    shadow: atlas-infra
+    provider_hint: claude-cli
+
+  data:
+    primary: atlas-data
+    fallbacks:
+      - gemini-2.5-pro
+      - claude-sonnet-4-20250514
+    shadow: atlas-data
+    provider_hint: claude-cli
+
+  documents:
+    primary: atlas-books
+    fallbacks:
+      - gemini-1.5-pro
+      - gemini-2.5-flash
+    shadow: atlas-books
+    provider_hint: claude-cli
+
+  long_context:
+    primary: gemini-1.5-pro
+    fallbacks:
+      - gemini-2.5-pro
+      - gemini-2.5-flash
+    shadow: atlas-books
+    provider_hint: vertex
+
+  embeddings:
+    primary: nomic-embed-text:latest
+    fallbacks:
+      - llama3.2:latest
+    shadow: null
+    provider_hint: ollama
+
+  low_cost_background:
+    primary: gemini-2.0-flash-lite
+    fallbacks:
+      - gemini-2.5-flash
+      - llama3.2:latest
+    shadow: null
+    provider_hint: vertex
+
+# ─── Routing mode overrides ───────────────────────────────────────────────────
+# Override the primary model per routing mode.
+# If not listed, falls back to task default above.
+
+mode_overrides:
+  quality:
+    coding: claude-sonnet-4-20250514
+    reasoning: claude-opus-4-20250514
+    deep_strategy: claude-opus-4-20250514
+    general: claude-sonnet-4-20250514
+    planning: claude-sonnet-4-20250514
+    security: claude-sonnet-4-20250514
+    data: gemini-2.5-pro
+    documents: gemini-1.5-pro
+
+  balanced:
+    coding: atlas-code
+    reasoning: claude-sonnet-4-20250514
+    general: atlas-plan
+    planning: atlas-plan
+    security: atlas-secure
+    infra: atlas-infra
+    data: atlas-data
+    documents: atlas-books
+
+  low_cost:
+    general: gemini-2.0-flash-lite
+    planning: gemini-2.5-flash
+    coding: qwen2.5-coder:7b
+    debugging: qwen2.5-coder:7b
+    reasoning: gemini-2.5-flash
+    data: gemini-2.5-flash
+    documents: gemini-2.5-flash
+    security: gemini-2.5-flash
+    infra: gemini-2.5-flash
+
+  local_first:
+    general: atlas-plan
+    planning: atlas-plan
+    coding: atlas-code
+    debugging: atlas-code
+    security: atlas-secure
+    infra: atlas-infra
+    data: atlas-data
+    documents: atlas-books
+
+# ─── Context-length thresholds ────────────────────────────────────────────────
+# Tokens above these limits override the primary model selection.
+
+context_routing:
+  # Above this → prefer Gemini models (1M context window)
+  long_threshold: 180000
+  long_model: gemini-2.5-pro
+  long_fallback: gemini-1.5-pro
+
+  # Above this → force gemini-1.5-pro (2M context)
+  very_long_threshold: 900000
+  very_long_model: gemini-1.5-pro
+
+# ─── Atlas model identity map ─────────────────────────────────────────────────
+# Maps atlas-* model names to their task types and external provider models.
+
+atlas_models:
+  atlas-plan:
+    task_types: [general, planning, reasoning]
+    external_model: claude-sonnet-4-20250514
+    external_provider: claude-cli
+    description: Planning, discussion, brainstorming
+
+  atlas-code:
+    task_types: [coding, debugging, private_coding]
+    external_model: claude-sonnet-4-20250514
+    external_provider: claude-cli
+    description: Code generation, debugging, review
+
+  atlas-secure:
+    task_types: [security]
+    external_model: claude-sonnet-4-20250514
+    external_provider: claude-cli
+    description: Security analysis, auditing
+
+  atlas-infra:
+    task_types: [infra]
+    external_model: claude-sonnet-4-20250514
+    external_provider: claude-cli
+    description: Infrastructure, DevOps, deployment
+
+  atlas-data:
+    task_types: [data]
+    external_model: claude-sonnet-4-20250514
+    external_provider: claude-cli
+    description: Data analysis, statistics, ETL
+
+  atlas-books:
+    task_types: [documents, long_context]
+    external_model: claude-sonnet-4-20250514
+    external_provider: claude-cli
+    description: Documentation, writing, research
+
+  atlas-audit:
+    task_types: [security, data]
+    external_model: claude-sonnet-4-20250514
+    external_provider: claude-cli
+    description: Compliance auditing, log analysis
+
+# ─── Session stickiness ───────────────────────────────────────────────────────
+# Controls how aggressively the pipeline sticks with the session's primary model.
+
+session_stickiness:
+  # Re-use session model when same or adjacent task type
+  enabled: true
+  # Adjacent task types that are compatible (don't force a model switch)
+  compatible_groups:
+    - [general, planning, reasoning, deep_strategy]
+    - [coding, debugging, private_coding]
+    - [security]
+    - [infra]
+    - [data]
+    - [documents, long_context]
+  # Fallback: always switch model on these task types regardless of session
+  always_reroute: [embeddings, long_context]

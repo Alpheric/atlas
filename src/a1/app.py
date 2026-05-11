@@ -276,6 +276,26 @@ def create_app() -> FastAPI:
                 headers={"Content-Disposition": "inline"},
             )
 
+    # Atlas landing page — atlas.alpheric.ai/
+    _landing_page = _pathlib.Path(__file__).parent.parent.parent / "public" / "landing" / "index.html"
+    if _landing_page.exists():
+        from fastapi.responses import HTMLResponse as _HTMLResponse
+
+        @app.get("/landing", include_in_schema=False)
+        @app.get("/landing/", include_in_schema=False)
+        async def landing_page():
+            return _HTMLResponse(content=_landing_page.read_text(encoding="utf-8"))
+
+    # Atlas CLI documentation page — atlas.alpheric.ai/cli
+    _cli_page = _pathlib.Path(__file__).parent.parent.parent / "public" / "cli" / "index.html"
+    if _cli_page.exists():
+        from fastapi.responses import HTMLResponse as _HTMLResponse
+
+        @app.get("/cli", include_in_schema=False)
+        @app.get("/cli/", include_in_schema=False)
+        async def cli_docs_page():
+            return _HTMLResponse(content=_cli_page.read_text(encoding="utf-8"))
+
     # Request ID + logging middleware
     import uuid as _uuid
 

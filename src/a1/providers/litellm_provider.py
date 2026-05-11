@@ -26,7 +26,7 @@ log = get_logger("providers.litellm")
 
 # LiteLLM global config
 litellm.num_retries = 2
-litellm.request_timeout = 1200  # 20 min — matches agent_execution_timeout
+litellm.request_timeout = 6000  # 100 min — matches agent_execution_timeout
 litellm.drop_params = True  # silently drop unsupported params per provider
 
 

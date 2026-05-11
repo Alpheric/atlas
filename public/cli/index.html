@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Atlas CLI — Agentic AI Coding Assistant</title>
+  <meta name="description" content="Atlas CLI is an agentic AI coding assistant for the terminal. Reads files, writes code, runs commands, and remembers context across sessions." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #080c10;
+      --bg2:       #0d1117;
+      --bg3:       #161b22;
+      --bg4:       #1c2128;
+      --border:    #21262d;
+      --border-hi: #30363d;
+      --green:     #3fb950;
+      --green-dim: #1a7f37;
+      --green-glow:rgba(63,185,80,.15);
+      --cyan:      #58a6ff;
+      --cyan-glow: rgba(88,166,255,.12);
+      --yellow:    #e3b341;
+      --red:       #f85149;
+      --magenta:   #bc8cff;
+      --orange:    #ffa657;
+      --teal:      #39d353;
+      --text:      #e6edf3;
+      --text-dim:  #8b949e;
+      --text-muted:#6e7681;
+      --radius:    8px;
+      --radius-lg: 14px;
+      --radius-xl: 20px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Animations ── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    /* Hero elements animate in via JS class — default visible so no flash */
+    .fade-up { opacity: 1; }
+    .fade-up.animated { opacity: 0; animation: fadeUp .5s ease forwards; }
+    .fade-up.animated.d1 { animation-delay: .05s; }
+    .fade-up.animated.d2 { animation-delay: .15s; }
+    .fade-up.animated.d3 { animation-delay: .25s; }
+    .fade-up.animated.d4 { animation-delay: .35s; }
+    .fade-up.animated.d5 { animation-delay: .45s; }
+    .reveal { opacity: 0; transform: translateY(20px); transition: opacity .5s ease, transform .5s ease; }
+    .reveal.visible { opacity: 1; transform: none; }
+
+    /* ── Nav ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(8,12,16,.85);
+      backdrop-filter: blur(16px) saturate(180%);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      display: flex; align-items: center; justify-content: space-between;
+      height: 58px;
+    }
+    .nav-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+    .nav-logo {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: linear-gradient(135deg, #1a7f37, #3fb950);
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700; color: #fff;
+      box-shadow: 0 0 12px rgba(63,185,80,.4);
+    }
+    .nav-brand-name { font-weight: 700; color: var(--text); font-size: 15px; letter-spacing: -.3px; }
+    .nav-brand-badge {
+      font-size: 10px; background: rgba(63,185,80,.1); border: 1px solid rgba(63,185,80,.25);
+      border-radius: 4px; padding: 1px 7px; color: var(--green);
+      font-family: 'JetBrains Mono', monospace; font-weight: 500;
+    }
+    .nav-links { display: flex; gap: 1.75rem; align-items: center; }
+    .nav-links a { color: var(--text-dim); text-decoration: none; font-size: 14px; transition: color .15s; font-weight: 500; }
+    .nav-links a:hover { color: var(--text); }
+    .nav-links a.ext::after { content: ' ↗'; font-size: 11px; opacity: .5; }
+    .nav-btn {
+      background: var(--green-dim); color: #fff; border: 1px solid rgba(63,185,80,.3);
+      border-radius: var(--radius); padding: 6px 18px; font-size: 13px; font-weight: 600;
+      cursor: pointer; text-decoration: none; transition: all .15s;
+      box-shadow: 0 0 0 0 rgba(63,185,80,.3);
+    }
+    .nav-btn:hover {
+      background: var(--green); box-shadow: 0 0 16px rgba(63,185,80,.3);
+    }
+
+    /* ── Layout ── */
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 2rem; }
+    .section { padding: 6rem 0; }
+    .section + .section { border-top: 1px solid var(--border); }
+
+    h2.section-title {
+      font-size: clamp(1.5rem, 3vw, 2rem); font-weight: 800; margin-bottom: .5rem;
+      background: linear-gradient(135deg, var(--text) 50%, var(--text-dim));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .section-sub { color: var(--text-dim); margin-bottom: 3rem; font-size: 15px; max-width: 560px; }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 6rem 0 5rem; text-align: center;
+      position: relative; overflow: hidden;
+    }
+    /* radial glow orbs */
+    .hero::before {
+      content: '';
+      position: absolute; top: -120px; left: 50%; transform: translateX(-50%);
+      width: 800px; height: 600px;
+      background: radial-gradient(ellipse at 50% 30%, rgba(63,185,80,.12) 0%, transparent 65%);
+      pointer-events: none;
+    }
+    .hero::after {
+      content: '';
+      position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(63,185,80,.15), transparent);
+      pointer-events: none;
+    }
+    .hero-inner { position: relative; z-index: 1; }
+    .hero-eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase;
+      color: var(--green); font-weight: 600; margin: 0 auto 2rem;
+      background: rgba(63,185,80,.07); border: 1px solid rgba(63,185,80,.2);
+      padding: 5px 14px; border-radius: 20px;
+    }
+    .hero-eyebrow::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: blink 2s infinite; flex-shrink: 0; }
+    /* Force block stacking so eyebrow sits above ASCII art */
+    .hero-eyebrow-row { display: block; text-align: center; margin-bottom: 0; }
+    .ascii-wrap {
+      display: block; text-align: center; margin-bottom: 2.5rem;
+      filter: drop-shadow(0 0 20px rgba(63,185,80,.2));
+    }
+    .ascii-art { display: inline-block; text-align: left; }
+    .ascii-art {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: clamp(8px, 1.4vw, 14px);
+      line-height: 1.2;
+      color: var(--green);
+      display: inline-block;
+      /* reset global pre styles */
+      background: none !important;
+      border: none !important;
+      border-radius: 0 !important;
+      padding: 0 !important;
+      margin: 0 !important;
+    }
+    .ascii-last { color: var(--cyan); }
+    .hero-headline {
+      font-size: clamp(1.25rem, 3vw, 1.6rem); font-weight: 700;
+      color: var(--text); max-width: 640px; margin: 0 auto 1rem;
+      letter-spacing: -.3px;
+    }
+    .hero-tagline {
+      font-size: clamp(.95rem, 2vw, 1.1rem);
+      color: var(--text-dim); max-width: 520px; margin: 0 auto 2.5rem;
+    }
+    .hero-cta { display: flex; gap: .875rem; justify-content: center; flex-wrap: wrap; margin-bottom: 2.5rem; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--green-dim); color: #fff;
+      border: 1px solid rgba(63,185,80,.4); border-radius: var(--radius);
+      padding: 10px 24px; font-size: 14px; font-weight: 600;
+      text-decoration: none; transition: all .2s; cursor: pointer;
+      box-shadow: 0 0 24px rgba(63,185,80,.2), inset 0 1px 0 rgba(255,255,255,.05);
+    }
+    .btn-primary:hover { background: var(--green); box-shadow: 0 0 32px rgba(63,185,80,.35); transform: translateY(-1px); }
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(255,255,255,.04); color: var(--text);
+      border: 1px solid var(--border-hi); border-radius: var(--radius);
+      padding: 10px 24px; font-size: 14px; font-weight: 500;
+      text-decoration: none; transition: all .2s; cursor: pointer;
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,.07); border-color: var(--text-muted); }
+
+    /* Install tabs */
+    .install-box { max-width: 660px; margin: 0 auto; }
+    .tabs { display: flex; gap: 2px; }
+    .tab-btn {
+      background: transparent; border: 1px solid var(--border);
+      border-bottom: none; color: var(--text-muted); padding: 6px 18px;
+      font-size: 13px; cursor: pointer; border-radius: 8px 8px 0 0;
+      transition: all .15s; font-family: 'Inter', sans-serif; font-weight: 500;
+    }
+    .tab-btn.active { background: var(--bg3); color: var(--text); border-color: var(--border-hi); }
+    .tab-btn:hover:not(.active) { color: var(--text-dim); background: rgba(255,255,255,.02); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .code-block {
+      background: var(--bg3); border: 1px solid var(--border-hi);
+      border-radius: 0 var(--radius) var(--radius) var(--radius);
+      padding: 1rem 1.25rem; display: flex; align-items: center;
+      justify-content: space-between; gap: 1rem;
+    }
+    .code-block code {
+      font-family: 'JetBrains Mono', monospace; font-size: 13px;
+      color: var(--cyan); flex: 1; word-break: break-all;
+    }
+    .copy-btn {
+      background: var(--bg4); border: 1px solid var(--border-hi); color: var(--text-muted);
+      padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
+      white-space: nowrap; transition: all .15s; font-family: 'Inter', sans-serif; font-weight: 500;
+    }
+    .copy-btn:hover { border-color: var(--green); color: var(--green); }
+    .copy-btn.copied { color: var(--green); border-color: var(--green); background: rgba(63,185,80,.08); }
+
+    .hero-badges { display: flex; gap: .6rem; justify-content: center; margin-top: 1.75rem; flex-wrap: wrap; }
+    .badge {
+      font-size: 11.5px; padding: 3px 11px; border-radius: 20px;
+      border: 1px solid var(--border); color: var(--text-muted); background: var(--bg3);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Terminal mockup ── */
+    .terminal-wrap { margin: 4.5rem 0 0; }
+    .terminal {
+      background: var(--bg2); border: 1px solid var(--border-hi); border-radius: var(--radius-lg);
+      overflow: hidden; max-width: 780px; margin: 0 auto;
+      box-shadow: 0 32px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.03),
+                  0 0 60px rgba(63,185,80,.06);
+    }
+    .terminal-bar {
+      background: var(--bg3); padding: 10px 16px; display: flex; align-items: center; gap: 7px;
+      border-bottom: 1px solid var(--border);
+    }
+    .dot { width: 12px; height: 12px; border-radius: 50%; }
+    .dot-r { background: #ff5f57; } .dot-y { background: #febc2e; } .dot-g { background: #28c840; }
+    .terminal-title {
+      color: var(--text-muted); font-size: 12px; font-family: 'JetBrains Mono', monospace;
+      margin: 0 auto;
+    }
+    .terminal-body {
+      padding: 1.5rem 1.75rem; font-family: 'JetBrains Mono', monospace;
+      font-size: 13px; line-height: 1.9;
+    }
+    .t-dim { color: var(--text-muted); }
+    .t-green { color: var(--green); }
+    .t-cyan { color: var(--cyan); }
+    .t-yellow { color: var(--yellow); }
+    .t-magenta { color: var(--magenta); }
+    .t-white { color: var(--text); }
+    .t-bold { font-weight: 700; }
+    .t-block {
+      margin-top: .5rem; background: rgba(63,185,80,.06);
+      border-left: 2px solid var(--green); padding: 8px 14px;
+      border-radius: 0 6px 6px 0;
+    }
+
+    /* ── Features grid ── */
+    .features-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 1rem; }
+    .feature-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: 1.5rem;
+      transition: border-color .2s, box-shadow .2s, transform .2s;
+      position: relative; overflow: hidden;
+    }
+    .feature-card::before {
+      content: ''; position: absolute; inset: 0;
+      background: radial-gradient(circle at 20% 20%, rgba(63,185,80,.05), transparent 60%);
+      opacity: 0; transition: opacity .3s;
+    }
+    .feature-card:hover { border-color: rgba(63,185,80,.35); box-shadow: 0 8px 32px rgba(0,0,0,.3), 0 0 0 1px rgba(63,185,80,.1); transform: translateY(-2px); }
+    .feature-card:hover::before { opacity: 1; }
+    .feature-icon-wrap {
+      width: 40px; height: 40px; border-radius: 10px; margin-bottom: 1rem;
+      display: flex; align-items: center; justify-content: center; font-size: 18px;
+      background: var(--bg3); border: 1px solid var(--border-hi);
+    }
+    .feature-title { font-weight: 600; font-size: 15px; margin-bottom: .4rem; color: var(--text); }
+    .feature-desc { color: var(--text-dim); font-size: 13.5px; line-height: 1.55; }
+
+    /* ── Quick Start ── */
+    .steps { display: flex; flex-direction: column; gap: 0; }
+    .step {
+      display: grid; grid-template-columns: 52px 1fr; gap: 1.25rem;
+      align-items: start; position: relative;
+    }
+    .step:not(:last-child)::before {
+      content: ''; position: absolute; left: 25px; top: 44px; bottom: -1.25rem;
+      width: 1px; background: linear-gradient(to bottom, var(--border-hi), transparent);
+    }
+    .step + .step { padding-top: 2.5rem; }
+    .step-num {
+      width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; margin-top: 3px;
+      background: var(--bg3); border: 1px solid var(--border-hi);
+      color: var(--text-dim); font-weight: 700; font-size: 13px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .step.done .step-num { background: rgba(63,185,80,.1); border-color: rgba(63,185,80,.3); color: var(--green); }
+    .step-body h4 { font-size: 15px; font-weight: 600; margin-bottom: .4rem; color: var(--text); }
+    .step-body p  { font-size: 14px; color: var(--text-dim); margin-bottom: .75rem; }
+
+    /* ── Docs section ── */
+    .docs-layout { display: grid; grid-template-columns: 210px 1fr; gap: 3.5rem; align-items: start; }
+    .docs-nav { position: sticky; top: 72px; }
+    .docs-nav-group { margin-bottom: 1.5rem; }
+    .docs-nav-title {
+      font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase;
+      color: var(--text-muted); font-weight: 700; margin-bottom: .6rem; padding-left: 10px;
+    }
+    .docs-nav a {
+      display: block; color: var(--text-dim); text-decoration: none;
+      font-size: 13.5px; padding: 5px 10px; border-radius: 6px;
+      transition: all .15s; font-weight: 450; position: relative;
+    }
+    .docs-nav a::before {
+      content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+      width: 2px; height: 0; background: var(--green); border-radius: 1px;
+      transition: height .15s;
+    }
+    .docs-nav a:hover { color: var(--text); background: rgba(255,255,255,.04); }
+    .docs-nav a.active { color: var(--green); background: rgba(63,185,80,.08); }
+    .docs-nav a.active::before { height: 16px; }
+
+    /* Doc content */
+    .doc-section { margin-bottom: 3.5rem; scroll-margin-top: 80px; }
+    .doc-section h3 {
+      font-size: 1.15rem; font-weight: 700; margin-bottom: 1rem;
+      padding-bottom: .6rem; border-bottom: 1px solid var(--border);
+      color: var(--text); display: flex; align-items: center; gap: .5rem;
+    }
+    .doc-section h4 {
+      font-size: 11px; font-weight: 700; color: var(--text-muted);
+      margin: 1.5rem 0 .6rem; text-transform: uppercase; letter-spacing: .8px;
+    }
+    .doc-section p { color: var(--text-dim); margin-bottom: .75rem; font-size: 14px; line-height: 1.65; }
+    .doc-section p strong { color: var(--text); }
+
+    /* Command table */
+    .cmd-table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; border-radius: var(--radius); overflow: hidden; }
+    .cmd-table thead tr { background: var(--bg3); }
+    .cmd-table th {
+      text-align: left; font-size: 11px; letter-spacing: .5px; text-transform: uppercase;
+      color: var(--text-muted); font-weight: 600; padding: 8px 14px;
+      border-bottom: 1px solid var(--border-hi);
+    }
+    .cmd-table td { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 13.5px; vertical-align: top; }
+    .cmd-table tbody tr:last-child td { border-bottom: none; }
+    .cmd-table tbody tr:hover td { background: rgba(255,255,255,.025); }
+    .cmd-table tbody { background: var(--bg2); }
+    .cmd { font-family: 'JetBrains Mono', monospace; color: var(--cyan); font-size: 12.5px; white-space: nowrap; }
+    .cmd-desc { color: var(--text-dim); }
+    .cmd-desc strong { color: var(--text); }
+
+    /* Inline code */
+    code {
+      font-family: 'JetBrains Mono', monospace; font-size: 12px;
+      background: rgba(110,118,129,.1); border: 1px solid var(--border-hi);
+      border-radius: 4px; padding: 1px 6px; color: var(--cyan);
+    }
+
+    /* Pre blocks */
+    pre {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.1rem 1.25rem;
+      overflow-x: auto; margin: .75rem 0 1.25rem;
+      font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.75;
+      color: var(--text);
+    }
+    pre .c { color: var(--text-muted); font-style: italic; }
+    pre .s { color: var(--yellow); }
+    pre .k { color: var(--cyan); }
+    pre .g { color: var(--green); }
+
+    /* Key shortcut pills */
+    kbd {
+      font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+      background: var(--bg3); border: 1px solid var(--border-hi);
+      border-bottom: 2px solid var(--border-hi); border-radius: 5px;
+      padding: 1px 8px; color: var(--text); white-space: nowrap;
+    }
+
+    /* Callout */
+    .callout {
+      background: rgba(63,185,80,.06); border: 1px solid rgba(63,185,80,.2);
+      border-left: 3px solid var(--green);
+      border-radius: var(--radius); padding: .875rem 1rem; margin: .75rem 0;
+      font-size: 14px; color: var(--text-dim);
+    }
+    .callout strong { color: var(--green); }
+
+    /* ── Models grid ── */
+    .models-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: .875rem; }
+    .model-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: 1.1rem 1.25rem;
+      transition: border-color .2s, transform .2s, box-shadow .2s;
+      position: relative; overflow: hidden;
+    }
+    .model-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+    .model-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    }
+    /* per-model accent colors */
+    .model-card.mc-code { border-color: rgba(88,166,255,.2); }
+    .model-card.mc-code::before { background: linear-gradient(90deg, var(--cyan), transparent); }
+    .model-card.mc-code:hover { border-color: rgba(88,166,255,.4); }
+    .model-card.mc-plan { border-color: rgba(188,140,255,.2); }
+    .model-card.mc-plan::before { background: linear-gradient(90deg, var(--magenta), transparent); }
+    .model-card.mc-plan:hover { border-color: rgba(188,140,255,.4); }
+    .model-card.mc-secure { border-color: rgba(248,81,73,.2); }
+    .model-card.mc-secure::before { background: linear-gradient(90deg, var(--red), transparent); }
+    .model-card.mc-secure:hover { border-color: rgba(248,81,73,.4); }
+    .model-card.mc-infra { border-color: rgba(255,166,87,.2); }
+    .model-card.mc-infra::before { background: linear-gradient(90deg, var(--orange), transparent); }
+    .model-card.mc-infra:hover { border-color: rgba(255,166,87,.4); }
+    .model-card.mc-data { border-color: rgba(227,179,65,.2); }
+    .model-card.mc-data::before { background: linear-gradient(90deg, var(--yellow), transparent); }
+    .model-card.mc-data:hover { border-color: rgba(227,179,65,.4); }
+    .model-card.mc-books { border-color: rgba(63,185,80,.2); }
+    .model-card.mc-books::before { background: linear-gradient(90deg, var(--green), transparent); }
+    .model-card.mc-books:hover { border-color: rgba(63,185,80,.4); }
+    .model-card.mc-audit { border-color: rgba(57,211,83,.2); }
+    .model-card.mc-audit::before { background: linear-gradient(90deg, var(--teal), transparent); }
+    .model-card.mc-audit:hover { border-color: rgba(57,211,83,.4); }
+
+    .model-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: .5rem; }
+    .model-name { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700; }
+    .mc-code  .model-name { color: var(--cyan); }
+    .mc-plan  .model-name { color: var(--magenta); }
+    .mc-secure .model-name { color: var(--red); }
+    .mc-infra .model-name { color: var(--orange); }
+    .mc-data  .model-name { color: var(--yellow); }
+    .mc-books .model-name { color: var(--green); }
+    .mc-audit .model-name { color: var(--teal); }
+    .model-badge {
+      font-size: 10px; padding: 1px 7px; border-radius: 12px;
+      background: rgba(63,185,80,.1); border: 1px solid rgba(63,185,80,.25);
+      color: var(--green); font-family: 'JetBrains Mono', monospace;
+    }
+    .model-desc { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+
+    /* ── Permission cards ── */
+    .perm-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
+    .perm-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: 1.25rem 1rem;
+      text-align: center; transition: all .2s; position: relative; overflow: hidden;
+    }
+    .perm-card::before {
+      content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 2px;
+    }
+    .perm-icon { font-size: 24px; margin-bottom: .75rem; }
+    .perm-mode { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700; margin-bottom: .5rem; }
+    .perm-desc { font-size: 13px; color: var(--text-dim); line-height: 1.4; }
+    .perm-card.readonly { border-color: rgba(88,166,255,.2); }
+    .perm-card.readonly::before { background: var(--cyan); }
+    .perm-card.readonly .perm-mode { color: var(--cyan); }
+    .perm-card.readonly:hover { border-color: rgba(88,166,255,.4); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+    .perm-card.ask { border-color: rgba(227,179,65,.2); }
+    .perm-card.ask::before { background: var(--yellow); }
+    .perm-card.ask .perm-mode { color: var(--yellow); }
+    .perm-card.ask:hover { border-color: rgba(227,179,65,.4); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+    .perm-card.auto { border-color: rgba(63,185,80,.2); }
+    .perm-card.auto::before { background: var(--green); }
+    .perm-card.auto .perm-mode { color: var(--green); }
+    .perm-card.auto:hover { border-color: rgba(63,185,80,.4); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+    .perm-card.danger { border-color: rgba(248,81,73,.2); }
+    .perm-card.danger::before { background: var(--red); }
+    .perm-card.danger .perm-mode { color: var(--red); }
+    .perm-card.danger:hover { border-color: rgba(248,81,73,.4); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border); padding: 3.5rem 0 2.5rem;
+      text-align: center; color: var(--text-muted); font-size: 13px;
+    }
+    .footer-logo { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 1.25rem; text-decoration: none; }
+    .footer-logo-icon {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: linear-gradient(135deg, #1a7f37, #3fb950);
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700; color: #fff;
+    }
+    .footer-logo-text { font-weight: 700; font-size: 15px; color: var(--text); letter-spacing: -.2px; }
+    .footer-links { display: flex; gap: 2rem; justify-content: center; flex-wrap: wrap; margin-bottom: 1.5rem; }
+    .footer-links a { color: var(--text-dim); text-decoration: none; font-size: 13.5px; transition: color .15s; font-weight: 500; }
+    .footer-links a:hover { color: var(--text); }
+    .footer-copy { color: var(--text-muted); font-size: 12.5px; }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .docs-layout { grid-template-columns: 1fr; }
+      .docs-nav { display: none; }
+      .perm-grid { grid-template-columns: repeat(2, 1fr); }
+      .nav-links { display: none; }
+      .ascii-art { font-size: 7px; }
+      .hero::after { display: none; }
+      .section { padding: 4rem 0; }
+    }
+    @media (max-width: 480px) {
+      .features-grid { grid-template-columns: 1fr; }
+      .models-grid { grid-template-columns: 1fr; }
+      .perm-grid { grid-template-columns: 1fr; }
+      .hero-cta { flex-direction: column; align-items: center; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Nav ────────────────────────────────────────────────────────────────── -->
+<nav>
+  <a class="nav-brand" href="/cli">
+    <div class="nav-logo">A</div>
+    <span class="nav-brand-name">Atlas CLI</span>
+    <span class="nav-brand-badge">by Alpheric AI</span>
+  </a>
+  <div class="nav-links">
+    <a href="#install">Install</a>
+    <a href="#features">Features</a>
+    <a href="#docs">Docs</a>
+    <a href="#models">Models</a>
+    <a href="https://atlas.alpheric.ai" target="_blank" class="ext">Dashboard</a>
+  </div>
+  <a class="nav-btn" href="#install">Get started</a>
+</nav>
+
+<!-- ── Hero ───────────────────────────────────────────────────────────────── -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-inner">
+      <div class="ascii-wrap fade-up">
+        <pre class="ascii-art">  ██████╗ ████████╗██╗      █████╗ ███████╗
+ ██╔══██╗╚══██╔══╝██║     ██╔══██╗██╔════╝
+ ███████║   ██║   ██║     ███████║███████╗
+ ██╔══██║   ██║   ██║     ██╔══██║╚════██║
+ <span class="ascii-last"> ██║  ██║   ██║   ███████╗██║  ██║███████║
+ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝</span></pre>
+      </div>
+      <div class="hero-eyebrow-row fade-up d1"><span class="hero-eyebrow">Terminal-native · Agentic · Always free</span></div>
+      <p class="hero-headline fade-up d2">An agentic AI coding assistant that lives in your terminal</p>
+      <p class="hero-tagline fade-up d3">
+        Reads files, writes code, runs commands, and remembers context across sessions — no browser, no context switching.
+      </p>
+      <div class="hero-cta fade-up d4">
+        <a class="btn-primary" href="#install">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 100 16A8 8 0 008 0zm0 2a6 6 0 110 12A6 6 0 018 2zm-.75 2.75v4.5l3.5-2.25-3.5-2.25z"/></svg>
+          Install now
+        </a>
+        <a class="btn-secondary" href="https://atlas.alpheric.ai" target="_blank">
+          Open Dashboard ↗
+        </a>
+      </div>
+
+      <!-- Install tabs -->
+      <div class="install-box fade-up d5" id="install">
+        <div class="tabs">
+          <button class="tab-btn active" onclick="switchTab('linux', this)">Linux / macOS</button>
+          <button class="tab-btn" onclick="switchTab('windows', this)">Windows</button>
+          <button class="tab-btn" onclick="switchTab('manual', this)">Manual</button>
+        </div>
+        <div id="tab-linux" class="tab-panel active">
+          <div class="code-block">
+            <code>curl -fsSL https://atlas.alpheric.ai/downloads/install.sh | bash</code>
+            <button class="copy-btn" onclick="copyCode(this, 'curl -fsSL https://atlas.alpheric.ai/downloads/install.sh | bash')">Copy</button>
+          </div>
+        </div>
+        <div id="tab-windows" class="tab-panel">
+          <div class="code-block">
+            <code>irm https://atlas.alpheric.ai/downloads/install.ps1 | iex</code>
+            <button class="copy-btn" onclick="copyCode(this, 'irm https://atlas.alpheric.ai/downloads/install.ps1 | iex')">Copy</button>
+          </div>
+        </div>
+        <div id="tab-manual" class="tab-panel">
+          <div class="code-block">
+            <code>curl -LO https://atlas.alpheric.ai/downloads/atlas-cli.tar.gz &amp;&amp; tar -xzf atlas-cli.tar.gz &amp;&amp; sudo mv atlas /usr/local/bin/</code>
+            <button class="copy-btn" onclick="copyCode(this, 'curl -LO https://atlas.alpheric.ai/downloads/atlas-cli.tar.gz && tar -xzf atlas-cli.tar.gz && sudo mv atlas /usr/local/bin/')">Copy</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-badges fade-up d5">
+        <span class="badge">v202605+</span>
+        <span class="badge">Bun runtime</span>
+        <span class="badge">Linux · macOS · Windows</span>
+        <span class="badge">Auto-updates silently</span>
+      </div>
+
+      <!-- Terminal mockup -->
+      <div class="terminal-wrap reveal">
+        <div class="terminal">
+          <div class="terminal-bar">
+            <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+            <span class="terminal-title">atlas — ~/dev/myapp</span>
+          </div>
+          <div class="terminal-body">
+<span class="t-green t-bold">  ██████╗ ████████╗██╗      █████╗ ███████╗</span><br>
+<span class="t-green t-bold"> ██╔══██╗╚══██╔══╝██║     ██╔══██╗██╔════╝</span><br>
+<span class="t-green"> ███████║   ██║   ██║     ███████║███████╗ </span><br>
+<span class="t-cyan"> ██║  ██║   ██║   ███████╗██║  ██║███████║ </span><br>
+<span class="t-cyan"> ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝</span><br>
+<span class="t-dim">─────────────────────────────────────────────</span><br>
+<span class="t-dim">model</span> <span class="t-green">atlas-code [agent]</span> &nbsp; <span class="t-dim">host</span> <span class="t-cyan">atlas.alpheric.ai</span> &nbsp; <span class="t-dim">dir</span> <span class="t-white">dev/myapp</span><br>
+<span class="t-dim">─────────────────────────────────────────────</span><br><br>
+<span class="t-cyan t-bold">▶ you</span><br>
+<span class="t-white">&nbsp;&nbsp;&nbsp;add JWT authentication to the Express API in src/routes/auth.ts</span><br><br>
+<span class="t-green t-bold">◆ atlas</span><br>
+<span class="t-white">&nbsp;&nbsp;&nbsp;I'll add JWT authentication. Let me read the current auth file first.</span><br><br>
+<span class="t-green">&nbsp;&nbsp;&nbsp;✓</span> <span class="t-cyan">◎ read</span> <span class="t-white">src/routes/auth.ts</span><br>
+<span class="t-green">&nbsp;&nbsp;&nbsp;✓</span> <span class="t-cyan">◎ read</span> <span class="t-white">src/middleware/index.ts</span><br>
+<span class="t-green">&nbsp;&nbsp;&nbsp;✓</span> <span class="t-cyan t-bold">✎ edit</span> <span class="t-white">src/routes/auth.ts</span> <span class="t-dim">→ Added JWT sign/verify, /login, /refresh</span><br>
+<span class="t-green">&nbsp;&nbsp;&nbsp;✓</span> <span class="t-cyan t-bold">✎ edit</span> <span class="t-white">src/middleware/auth.ts</span> <span class="t-dim">→ Created requireAuth middleware</span><br>
+<span class="t-yellow">&nbsp;&nbsp;&nbsp;✓</span> <span class="t-yellow">▶ run</span> <span class="t-white">npm test</span> <span class="t-dim">→ 24 passed</span><br><br>
+<div class="t-block">
+<span class="t-white">Done. Added:</span><br>
+<span class="t-green">•</span> <span class="t-white"><code style="background:none;border:none;color:#58a6ff;font-size:12px">POST /auth/login</code> — returns signed JWT</span><br>
+<span class="t-green">•</span> <span class="t-white"><code style="background:none;border:none;color:#58a6ff;font-size:12px">POST /auth/refresh</code> — refreshes token</span><br>
+<span class="t-green">•</span> <span class="t-white"><code style="background:none;border:none;color:#58a6ff;font-size:12px">requireAuth</code> middleware for protected routes</span>
+</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Features ────────────────────────────────────────────────────────────── -->
+<section class="section" id="features">
+  <div class="container">
+    <h2 class="section-title reveal">Everything you need to code faster</h2>
+    <p class="section-sub reveal">Built for developers who live in the terminal. No browser, no context switching.</p>
+    <div class="features-grid">
+      <div class="feature-card reveal">
+        <div class="feature-icon-wrap">⚡</div>
+        <div class="feature-title">Agentic tool use</div>
+        <div class="feature-desc">Reads files, writes code, runs tests, makes git commits — all autonomously with your approval.</div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="feature-icon-wrap">🧠</div>
+        <div class="feature-title">Persistent memory</div>
+        <div class="feature-desc">Auto-saves a session summary every 3 turns to <code>.atlas/memory.md</code>. Picks up exactly where you left off.</div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="feature-icon-wrap">🔧</div>
+        <div class="feature-title">/fix loop</div>
+        <div class="feature-desc">Run tests → Atlas fixes errors → run again. Loops up to 5× until everything passes. Works with any test runner.</div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="feature-icon-wrap">📖</div>
+        <div class="feature-title">Auto-context</div>
+        <div class="feature-desc">Mention a filename in your message — Atlas reads it automatically before answering. No <code>/add</code> needed.</div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="feature-icon-wrap">🔄</div>
+        <div class="feature-title">Session restore</div>
+        <div class="feature-desc">Every conversation is saved to <code>~/.atlas/sessions/</code>. Use <code>/history</code> and <code>/resume</code> to jump back in.</div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="feature-icon-wrap">📦</div>
+        <div class="feature-title">Auto-compact</div>
+        <div class="feature-desc">When context reaches ~80K tokens, automatically summarises the conversation and continues — no interruption.</div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="feature-icon-wrap">🎨</div>
+        <div class="feature-title">Markdown rendering</div>
+        <div class="feature-desc">Responses render properly: bold, code blocks with syntax highlighting, headers, bullet lists — not raw markdown.</div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="feature-icon-wrap">🔗</div>
+        <div class="feature-title">Pipe &amp; one-shot mode</div>
+        <div class="feature-desc"><code>cat error.log | atlas "fix this"</code> or <code>atlas ask "..."</code> — no TUI, stdout output, perfect for scripts.</div>
+      </div>
+      <div class="feature-card reveal">
+        <div class="feature-icon-wrap">🔒</div>
+        <div class="feature-title">Permission modes</div>
+        <div class="feature-desc">readonly · ask · auto · danger. Full control over what Atlas can do without you approving.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Quick Start ─────────────────────────────────────────────────────────── -->
+<section class="section" id="quickstart">
+  <div class="container">
+    <h2 class="section-title reveal">Quick start</h2>
+    <p class="section-sub reveal">From zero to your first AI-powered commit in under 2 minutes.</p>
+    <div class="steps">
+      <div class="step reveal">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h4>Install &amp; configure</h4>
+          <p>Run the install script then set your API key.</p>
+          <pre><span class="g">curl -fsSL https://atlas.alpheric.ai/downloads/install.sh | bash</span>
+atlas config set apiKey <span class="s">sk-atlas-xxxx</span>
+atlas config set baseUrl <span class="s">https://atlas.alpheric.ai/v1</span></pre>
+        </div>
+      </div>
+      <div class="step reveal">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h4>Initialise your workspace</h4>
+          <p>Run inside your project directory. Creates <code>.atlas/</code> and <code>ATLAS.md</code>.</p>
+          <pre><span class="k">cd</span> your-project
+atlas init</pre>
+          <div class="callout"><strong>Tip:</strong> Edit <code>ATLAS.md</code> to add project-specific instructions — stack, conventions, files to avoid. Atlas reads it every session.</div>
+        </div>
+      </div>
+      <div class="step reveal">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h4>Start coding</h4>
+          <p>Launch the interactive session and start chatting.</p>
+          <pre><span class="g">atlas</span>
+<span class="c"># In the TUI:</span>
+<span class="c"># "add input validation to src/routes/users.ts"</span>
+<span class="c"># "fix the failing tests"</span>
+<span class="c"># "/commit"</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Docs ────────────────────────────────────────────────────────────────── -->
+<section class="section" id="docs">
+  <div class="container">
+    <h2 class="section-title reveal">Documentation</h2>
+    <p class="section-sub reveal">Everything you need to know about Atlas CLI.</p>
+    <div class="docs-layout">
+
+      <!-- Sidebar nav -->
+      <aside class="docs-nav">
+        <div class="docs-nav-group">
+          <div class="docs-nav-title">Reference</div>
+          <a href="#doc-cli">CLI commands</a>
+          <a href="#doc-keyboard">Keyboard shortcuts</a>
+          <a href="#doc-slash">Slash commands</a>
+        </div>
+        <div class="docs-nav-group">
+          <div class="docs-nav-title">Guides</div>
+          <a href="#doc-modes">Modes of operation</a>
+          <a href="#doc-workspace">Workspace setup</a>
+          <a href="#doc-memory">Memory system</a>
+          <a href="#doc-sessions">Sessions</a>
+          <a href="#doc-fix">Fix loop</a>
+          <a href="#doc-autocompact">Auto-compact</a>
+          <a href="#doc-custom">Custom commands</a>
+          <a href="#doc-config">Configuration</a>
+        </div>
+      </aside>
+
+      <!-- Main docs -->
+      <div class="docs-content">
+
+        <!-- CLI commands -->
+        <div class="doc-section" id="doc-cli">
+          <h3>CLI commands</h3>
+          <table class="cmd-table">
+            <thead><tr><th>Command</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td class="cmd">atlas</td><td class="cmd-desc">Start interactive TUI session</td></tr>
+              <tr><td class="cmd">atlas ask &lt;prompt&gt;</td><td class="cmd-desc">One-shot answer to stdout — no TUI</td></tr>
+              <tr><td class="cmd">atlas init</td><td class="cmd-desc">Create <code>.atlas/</code> and <code>ATLAS.md</code> in current directory</td></tr>
+              <tr><td class="cmd">atlas config</td><td class="cmd-desc">Show current configuration</td></tr>
+              <tr><td class="cmd">atlas config set &lt;key&gt; &lt;val&gt;</td><td class="cmd-desc">Persist a config value</td></tr>
+              <tr><td class="cmd">atlas doctor</td><td class="cmd-desc">Check API key, backend, git, version</td></tr>
+              <tr><td class="cmd">atlas update</td><td class="cmd-desc">Update to latest version (foreground with progress)</td></tr>
+              <tr><td class="cmd">atlas diff</td><td class="cmd-desc">Show git diff</td></tr>
+              <tr><td class="cmd">atlas git</td><td class="cmd-desc">Show git status</td></tr>
+              <tr><td class="cmd">atlas review</td><td class="cmd-desc">Review staged changes</td></tr>
+              <tr><td class="cmd">atlas commit-message</td><td class="cmd-desc">Generate a commit message only</td></tr>
+            </tbody>
+          </table>
+
+          <h4>Flags</h4>
+          <table class="cmd-table">
+            <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td class="cmd">--model, -m</td><td class="cmd-desc">Atlas model to use (e.g. <code>atlas-plan</code>)</td></tr>
+              <tr><td class="cmd">--url, -u</td><td class="cmd-desc">Backend URL override</td></tr>
+              <tr><td class="cmd">--key, -k</td><td class="cmd-desc">API key override</td></tr>
+              <tr><td class="cmd">--no-agent</td><td class="cmd-desc">Plain chat only — no tool use</td></tr>
+              <tr><td class="cmd">--auto-model</td><td class="cmd-desc">Auto-route model by task type</td></tr>
+              <tr><td class="cmd">--system "..."</td><td class="cmd-desc">Override system prompt for this session</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Keyboard shortcuts -->
+        <div class="doc-section" id="doc-keyboard">
+          <h3>Keyboard shortcuts</h3>
+          <table class="cmd-table">
+            <thead><tr><th>Key</th><th>Action</th></tr></thead>
+            <tbody>
+              <tr><td><kbd>Enter</kbd></td><td class="cmd-desc">Send message</td></tr>
+              <tr><td><kbd>Shift</kbd>+<kbd>Enter</kbd></td><td class="cmd-desc">Insert newline (multi-line input)</td></tr>
+              <tr><td><kbd>Esc</kbd></td><td class="cmd-desc"><strong>Interrupt</strong> current response mid-stream</td></tr>
+              <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td class="cmd-desc">Browse message history</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td class="cmd-desc">Move cursor to start of line</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>E</kbd></td><td class="cmd-desc">Move cursor to end of line</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>W</kbd></td><td class="cmd-desc">Delete previous word</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>U</kbd></td><td class="cmd-desc">Clear entire input line</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td class="cmd-desc">Delete from cursor to end of line</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td class="cmd-desc">Quit Atlas</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Slash commands -->
+        <div class="doc-section" id="doc-slash">
+          <h3>Slash commands</h3>
+
+          <h4>Navigation</h4>
+          <table class="cmd-table"><tbody>
+            <tr><td class="cmd">/help</td><td class="cmd-desc">Show all slash commands</td></tr>
+            <tr><td class="cmd">/clear</td><td class="cmd-desc">Clear conversation history</td></tr>
+            <tr><td class="cmd">/compact</td><td class="cmd-desc">Manually summarise conversation to reduce context</td></tr>
+            <tr><td class="cmd">/status</td><td class="cmd-desc">Workspace, model, permissions, token usage</td></tr>
+            <tr><td class="cmd">/doctor</td><td class="cmd-desc">Run health checks</td></tr>
+          </tbody></table>
+
+          <h4>Files &amp; Code</h4>
+          <table class="cmd-table"><tbody>
+            <tr><td class="cmd">/add &lt;glob&gt;</td><td class="cmd-desc">Inject files into context. e.g. <code>/add src/**/*.ts</code> (up to 20 files)</td></tr>
+            <tr><td class="cmd">/read &lt;path&gt;</td><td class="cmd-desc">Read and display a file</td></tr>
+            <tr><td class="cmd">/edit &lt;path&gt;</td><td class="cmd-desc">Ask Atlas to edit a file</td></tr>
+            <tr><td class="cmd">/write &lt;path&gt;</td><td class="cmd-desc">Ask Atlas to write a new file</td></tr>
+            <tr><td class="cmd">/run &lt;cmd&gt;</td><td class="cmd-desc">Run a shell command</td></tr>
+            <tr><td class="cmd">/test</td><td class="cmd-desc">Run tests (auto-detects npm/cargo/pytest/go)</td></tr>
+            <tr><td class="cmd">/build</td><td class="cmd-desc">Run build</td></tr>
+            <tr><td class="cmd">/fix</td><td class="cmd-desc">Run tests → fix errors → repeat up to 5×</td></tr>
+            <tr><td class="cmd">/fix &lt;cmd&gt;</td><td class="cmd-desc">Fix loop with specific command, e.g. <code>/fix cargo test</code></td></tr>
+            <tr><td class="cmd">/rollback</td><td class="cmd-desc">Undo last file changes from <code>.atlas/backups/</code></td></tr>
+          </tbody></table>
+
+          <h4>Git</h4>
+          <table class="cmd-table"><tbody>
+            <tr><td class="cmd">/git</td><td class="cmd-desc">Show git status</td></tr>
+            <tr><td class="cmd">/diff</td><td class="cmd-desc">Show git diff</td></tr>
+            <tr><td class="cmd">/review</td><td class="cmd-desc">Code review of staged changes</td></tr>
+            <tr><td class="cmd">/commit</td><td class="cmd-desc">Generate commit message + run <code>git commit</code></td></tr>
+            <tr><td class="cmd">/pr</td><td class="cmd-desc">Generate PR title + description vs main</td></tr>
+            <tr><td class="cmd">/pr &lt;base&gt;</td><td class="cmd-desc">PR description vs specified branch</td></tr>
+          </tbody></table>
+
+          <h4>Memory &amp; Sessions</h4>
+          <table class="cmd-table"><tbody>
+            <tr><td class="cmd">/memory</td><td class="cmd-desc">Show <code>.atlas/memory.md</code> contents</td></tr>
+            <tr><td class="cmd">/memory save</td><td class="cmd-desc">Force immediate memory update</td></tr>
+            <tr><td class="cmd">/copy</td><td class="cmd-desc">Copy last response to clipboard</td></tr>
+            <tr><td class="cmd">/history</td><td class="cmd-desc">List saved sessions (last 15)</td></tr>
+            <tr><td class="cmd">/resume &lt;n&gt;</td><td class="cmd-desc">Restore session n from /history</td></tr>
+          </tbody></table>
+
+          <h4>Analysis &amp; Planning</h4>
+          <table class="cmd-table"><tbody>
+            <tr><td class="cmd">/plan &lt;goal&gt;</td><td class="cmd-desc">Create a step-by-step implementation plan</td></tr>
+            <tr><td class="cmd">/security</td><td class="cmd-desc">Security review of the codebase</td></tr>
+            <tr><td class="cmd">/docs &lt;file&gt;</td><td class="cmd-desc">Generate documentation for a file</td></tr>
+            <tr><td class="cmd">/undo</td><td class="cmd-desc">List recent tool actions (for manual undo)</td></tr>
+          </tbody></table>
+
+          <h4>Settings</h4>
+          <table class="cmd-table"><tbody>
+            <tr><td class="cmd">/model</td><td class="cmd-desc">Show available models</td></tr>
+            <tr><td class="cmd">/model &lt;name&gt;</td><td class="cmd-desc">Switch active model</td></tr>
+            <tr><td class="cmd">/permissions</td><td class="cmd-desc">Show current permission mode</td></tr>
+            <tr><td class="cmd">/permissions &lt;mode&gt;</td><td class="cmd-desc">Set mode: <code>readonly</code> / <code>ask</code> / <code>auto</code> / <code>danger</code></td></tr>
+          </tbody></table>
+        </div>
+
+        <!-- Modes -->
+        <div class="doc-section" id="doc-modes">
+          <h3>Modes of operation</h3>
+
+          <h4>Interactive TUI (default)</h4>
+          <pre><span class="g">atlas</span>
+<span class="g">atlas</span> --model atlas-plan
+<span class="g">atlas</span> --no-agent     <span class="c"># plain chat, no tool use</span>
+<span class="g">atlas</span> --auto-model  <span class="c"># auto-select model by task type</span></pre>
+
+          <h4>One-shot mode</h4>
+          <p>Prints the answer directly to stdout. No TUI. Good for scripts.</p>
+          <pre><span class="g">atlas ask</span> <span class="s">"what does auth.ts do?"</span>
+<span class="g">atlas ask</span> <span class="s">"summarise the last 5 commits"</span> --model atlas-plan</pre>
+
+          <h4>Pipe mode</h4>
+          <p>When stdin is not a TTY, Atlas reads it and combines with your prompt.</p>
+          <pre><span class="k">cat</span> error.log | <span class="g">atlas</span> <span class="s">"why is this failing?"</span>
+<span class="k">git diff</span> | <span class="g">atlas</span> <span class="s">"write a commit message"</span>
+<span class="k">cat</span> src/auth.ts | <span class="g">atlas</span>   <span class="c"># analyse without a prompt</span></pre>
+        </div>
+
+        <!-- Workspace -->
+        <div class="doc-section" id="doc-workspace">
+          <h3>Workspace setup</h3>
+          <p>Run <code>atlas init</code> in your project root to create the workspace:</p>
+          <pre>.atlas/
+  memory.md        <span class="c">← session memory (auto-updated every 3 turns)</span>
+  permissions.json <span class="c">← permission config</span>
+  commands/        <span class="c">← custom slash commands (*.md files)</span>
+  backups/         <span class="c">← file backups before each edit</span>
+  audit.jsonl      <span class="c">← tool action log</span>
+ATLAS.md           <span class="c">← project context injected every session</span></pre>
+
+          <div class="callout">
+            <strong>ATLAS.md is the most important file.</strong> Put your tech stack, conventions, files to avoid, and coding standards here. Atlas reads it on every startup.
+          </div>
+
+          <p>Example <code>ATLAS.md</code>:</p>
+          <pre><span class="c"># My App</span>
+
+Next.js 14 · TypeScript strict · PostgreSQL · Prisma ORM
+
+<span class="c">## Rules</span>
+- Always run <span class="s">`npm test`</span> after making changes
+- Never modify files in /generated/ or /migrations/
+- Use Zod for all runtime validation
+- Components go in src/components/, hooks in src/hooks/</pre>
+        </div>
+
+        <!-- Memory -->
+        <div class="doc-section" id="doc-memory">
+          <h3>Memory system</h3>
+          <p>Atlas automatically builds and maintains <code>.atlas/memory.md</code> as you work.</p>
+          <table class="cmd-table"><tbody>
+            <tr><td class="cmd">Every 3 turns</td><td class="cmd-desc">Auto-generates a fresh summary: key decisions, files changed, task status, open items</td></tr>
+            <tr><td class="cmd">/memory save</td><td class="cmd-desc">Force an immediate save at any point</td></tr>
+            <tr><td class="cmd">/memory</td><td class="cmd-desc">Display current memory contents</td></tr>
+            <tr><td class="cmd">Next session</td><td class="cmd-desc">Memory is injected into the system prompt — Atlas knows where you left off</td></tr>
+          </tbody></table>
+        </div>
+
+        <!-- Sessions -->
+        <div class="doc-section" id="doc-sessions">
+          <h3>Session restore</h3>
+          <p>Full conversations are saved to <code>~/.atlas/sessions/</code> after every turn. Sessions older than 30 days are pruned automatically.</p>
+          <pre><span class="c"># List saved sessions</span>
+/history
+
+<span class="c">Saved sessions (newest first):</span>
+  <span class="g">1.</span> [11 May 2026, 17:45]  dev/myapp · 12 turns
+     <span class="c">"add JWT authentication to the Express API…"</span>
+  <span class="g">2.</span> [10 May 2026, 09:30]  dev/myapp · 4 turns
+     <span class="c">"refactor the database connection pool…"</span>
+
+<span class="c"># Restore session 1</span>
+/resume 1</pre>
+          <p>Restoring replays the last exchange so you immediately see the context, then continues from the full message history.</p>
+        </div>
+
+        <!-- Fix loop -->
+        <div class="doc-section" id="doc-fix">
+          <h3>Fix loop</h3>
+          <p>The <code>/fix</code> command creates an automated repair cycle:</p>
+          <pre><span class="c"># Auto-detect test command</span>
+/fix
+
+<span class="c"># Specific command</span>
+/fix cargo test
+/fix pytest -x
+/fix npm run lint</pre>
+
+          <p>How it works:</p>
+          <pre><span class="g">🔧 Attempt 1/5 — running: npm test</span>
+<span class="c">✗ Failed (exit 1) — asking Atlas to fix…</span>
+
+<span class="c">  ✓ ◎ read  src/utils/parser.ts</span>
+<span class="c">  ✓ ✎ edit  src/utils/parser.ts → Fixed regex on line 42</span>
+
+<span class="g">🔧 Attempt 2/5 — running: npm test</span>
+<span class="g">✓ All checks pass after 2 fixes!</span></pre>
+
+          <p>Supports auto-detection for: <code>npm test</code>, <code>npm run build</code>, <code>cargo test</code>, <code>go test ./...</code>, <code>pytest</code>. Any custom command also works.</p>
+        </div>
+
+        <!-- Auto-compact -->
+        <div class="doc-section" id="doc-autocompact">
+          <h3>Auto-compact</h3>
+          <p>When the conversation reaches ~80K tokens, Atlas automatically:</p>
+          <pre><span class="c">📦 Context ~82K tokens — auto-compacting…</span>
+<span class="g">✓ Compacted — continuing with summary + last 6 messages</span></pre>
+          <p>The compaction writes a dense 400-word summary of all decisions and changes, replaces the conversation history with it, and continues seamlessly. If compaction fails for any reason, Atlas proceeds with the full context.</p>
+          <p>You can also compact manually at any time with <code>/compact</code>.</p>
+        </div>
+
+        <!-- Custom commands -->
+        <div class="doc-section" id="doc-custom">
+          <h3>Custom slash commands</h3>
+          <p>Create <code>.atlas/commands/&lt;name&gt;.md</code> to define your own commands. The file content is the prompt sent to Atlas. Use <code>$ARGUMENTS</code> for anything typed after the command name.</p>
+          <pre><span class="c"># .atlas/commands/deploy.md</span>
+Run the deployment checklist for $ARGUMENTS:
+1. Run <span class="s">`npm test`</span> — abort if any fail
+2. Run <span class="s">`npm run build`</span>
+3. Check git status — all changes committed?
+4. Output the deploy command for $ARGUMENTS</pre>
+
+          <pre><span class="c"># Usage:</span>
+/deploy staging
+/deploy production</pre>
+        </div>
+
+        <!-- Config -->
+        <div class="doc-section" id="doc-config">
+          <h3>Configuration</h3>
+          <p>Config is stored in <code>~/.atlas/config.json</code>.</p>
+          <table class="cmd-table">
+            <thead><tr><th>Key</th><th>Description</th><th>Default</th></tr></thead>
+            <tbody>
+              <tr><td class="cmd">apiKey</td><td class="cmd-desc">Your Atlas API key</td><td class="cmd-desc t-dim">—</td></tr>
+              <tr><td class="cmd">baseUrl</td><td class="cmd-desc">Backend URL</td><td class="cmd-desc"><code>https://atlas.alpheric.ai/v1</code></td></tr>
+              <tr><td class="cmd">model</td><td class="cmd-desc">Default model</td><td class="cmd-desc"><code>atlas-code</code></td></tr>
+              <tr><td class="cmd">stream</td><td class="cmd-desc">Enable streaming responses</td><td class="cmd-desc"><code>true</code></td></tr>
+            </tbody>
+          </table>
+          <pre><span class="g">atlas config set</span> apiKey <span class="s">sk-atlas-xxxx</span>
+<span class="g">atlas config set</span> baseUrl <span class="s">https://atlas.alpheric.ai/v1</span>
+<span class="g">atlas config set</span> model <span class="s">atlas-plan</span></pre>
+        </div>
+
+      </div><!-- end docs-content -->
+    </div><!-- end docs-layout -->
+  </div>
+</section>
+
+<!-- ── Models ──────────────────────────────────────────────────────────────── -->
+<section class="section" id="models">
+  <div class="container">
+    <h2 class="section-title reveal">Models</h2>
+    <p class="section-sub reveal">Each Atlas model is optimised for a specific type of work. Switch with <code>/model &lt;name&gt;</code>.</p>
+    <div class="models-grid">
+      <div class="model-card mc-code reveal">
+        <div class="model-header">
+          <div class="model-name">atlas-code</div>
+          <span class="model-badge">default</span>
+        </div>
+        <div class="model-desc">Code writing, refactoring, debugging.</div>
+      </div>
+      <div class="model-card mc-plan reveal">
+        <div class="model-header"><div class="model-name">atlas-plan</div></div>
+        <div class="model-desc">Architecture, planning, complex reasoning, technical design.</div>
+      </div>
+      <div class="model-card mc-secure reveal">
+        <div class="model-header"><div class="model-name">atlas-secure</div></div>
+        <div class="model-desc">Security reviews, vulnerability analysis, threat modelling.</div>
+      </div>
+      <div class="model-card mc-infra reveal">
+        <div class="model-header"><div class="model-name">atlas-infra</div></div>
+        <div class="model-desc">DevOps, Docker, CI/CD pipelines, cloud infrastructure.</div>
+      </div>
+      <div class="model-card mc-data reveal">
+        <div class="model-header"><div class="model-name">atlas-data</div></div>
+        <div class="model-desc">Data analysis, SQL queries, ETL pipelines, data modelling.</div>
+      </div>
+      <div class="model-card mc-books reveal">
+        <div class="model-header"><div class="model-name">atlas-books</div></div>
+        <div class="model-desc">Documentation, technical writing, READMEs, changelogs.</div>
+      </div>
+      <div class="model-card mc-audit reveal">
+        <div class="model-header"><div class="model-name">atlas-audit</div></div>
+        <div class="model-desc">Compliance auditing, policy review, code standards enforcement.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Permissions ─────────────────────────────────────────────────────────── -->
+<section class="section">
+  <div class="container">
+    <h2 class="section-title reveal">Permission modes</h2>
+    <p class="section-sub reveal">Control what Atlas can do autonomously. Set with <code>/permissions &lt;mode&gt;</code>.</p>
+    <div class="perm-grid">
+      <div class="perm-card readonly reveal">
+        <div class="perm-icon">👁</div>
+        <div class="perm-mode">readonly</div>
+        <div class="perm-desc">Can only read files. No writes, no commands.</div>
+      </div>
+      <div class="perm-card ask reveal">
+        <div class="perm-icon">💬</div>
+        <div class="perm-mode">ask</div>
+        <div class="perm-desc">Asks before every write or command. <strong>Default.</strong></div>
+      </div>
+      <div class="perm-card auto reveal">
+        <div class="perm-icon">⚡</div>
+        <div class="perm-mode">auto</div>
+        <div class="perm-desc">Runs all tools automatically. Best for trusted tasks.</div>
+      </div>
+      <div class="perm-card danger reveal">
+        <div class="perm-icon">⚠️</div>
+        <div class="perm-mode">danger</div>
+        <div class="perm-desc">No restrictions. Use with caution.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ──────────────────────────────────────────────────────────────── -->
+<footer>
+  <div class="container">
+    <a class="footer-logo" href="/cli">
+      <div class="footer-logo-icon">A</div>
+      <span class="footer-logo-text">Atlas CLI</span>
+    </a>
+    <div class="footer-links">
+      <a href="https://atlas.alpheric.ai" target="_blank">Dashboard</a>
+      <a href="/downloads/install.sh" download>install.sh</a>
+      <a href="/downloads/install.ps1" download>install.ps1</a>
+      <a href="/downloads/atlas-cli.tar.gz" download>atlas-cli.tar.gz</a>
+      <a href="https://alpheric.ai" target="_blank">Alpheric AI</a>
+    </div>
+    <p class="footer-copy">© 2026 Alpheric AI. Built for developers who live in the terminal.</p>
+  </div>
+</footer>
+
+<script>
+  function switchTab(name, btn) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    btn.classList.add('active');
+  }
+
+  function copyCode(btn, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = '✓ Copied';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
+    });
+  }
+
+  // Hero entrance animations — trigger after first paint so animation always runs
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.fade-up').forEach(el => el.classList.add('animated'));
+  });
+
+  // Scroll-reveal
+  const revealObserver = new IntersectionObserver(entries => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); revealObserver.unobserve(e.target); } });
+  }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+  document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
+
+  // Active docs nav link on scroll
+  const docSections = document.querySelectorAll('[id^="doc-"]');
+  const navLinks = document.querySelectorAll('.docs-nav a');
+  const navObserver = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        navLinks.forEach(a => {
+          a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id);
+        });
+      }
+    });
+  }, { rootMargin: '-15% 0px -75% 0px' });
+  docSections.forEach(s => navObserver.observe(s));
+</script>
+</body>
+</html>

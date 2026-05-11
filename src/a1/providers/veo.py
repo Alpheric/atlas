@@ -32,6 +32,7 @@ import httpx
 import yaml
 
 from a1.common.logging import get_logger
+from a1.providers.base import ModelInfo
 from config.settings import settings
 
 log = get_logger("providers.veo")
@@ -389,8 +390,22 @@ class VeoProvider:
             return True
         return False
 
-    def list_models(self) -> list[dict]:
-        return self._models
+    def list_models(self) -> list[ModelInfo]:
+        """Return models as ModelInfo objects so registry.list_providers() works correctly."""
+        return [
+            ModelInfo(
+                name=m["name"],
+                provider="veo",
+                context_window=0,
+                cost_per_1k_input=0.0,
+                cost_per_1k_output=round(m.get("cost_per_second", 0.0035) * 1000, 4),
+                supports_tools=False,
+                supports_streaming=False,
+                tier="frontier",
+                latency_class="batch",
+            )
+            for m in self._models
+        ]
 
     def supports_model(self, model: str) -> bool:
         return any(m["name"] == model for m in self._models)

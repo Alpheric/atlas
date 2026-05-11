@@ -62,7 +62,7 @@ async def list_providers():
                 "healthy": bool(
                     _s.vertex_project_id
                 ),  # assume ok if project set; health checked separately
-                "models": [m["name"] for m in veo_provider.list_models()],
+                "models": [m.name for m in veo_provider.list_models()],
                 "model_count": len(veo_provider.list_models()),
                 "project_id": _s.vertex_project_id,
                 "supports_vision": True,

@@ -153,13 +153,15 @@ class CorePipelineResult:
     raw_response: object | None = None
 
 
-async def _tool_complete_and_stream(provider, req, timeout: float = 120.0, fallback=None):
+async def _tool_complete_and_stream(provider, req, timeout: float | None = None, fallback=None):
     """Run provider.complete() INSIDE the stream so SSE starts immediately.
 
     Emits the role chunk right away to keep Ares/Hermes alive during inference.
-    If provider times out (default 120s) and a fallback provider is given, retries
-    once on the fallback before emitting an error chunk.
+    If provider times out (agent_execution_timeout, default 1200s) and a fallback
+    provider is given, retries once on the fallback before emitting an error chunk.
     """
+    if timeout is None:
+        timeout = float(settings.agent_execution_timeout)
     from a1.proxy.response_models import ChatCompletionChunk, DeltaMessage, StreamChoice
 
     chunk_id = f"chatcmpl-cli-{uuid.uuid4().hex[:8]}"
@@ -968,7 +970,9 @@ class CorePipeline:
                 )
 
                 if inp.stream:
-                    result.chunk_iterator = _tool_complete_and_stream(cli, req)
+                    result.chunk_iterator = _tool_complete_and_stream(
+                        cli, req, timeout=float(settings.agent_execution_timeout)
+                    )
                     result.provider_name = "claude-cli"
                     result.model_name = atlas_model
                     return
