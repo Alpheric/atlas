@@ -141,6 +141,7 @@ export interface AgentLoopOptions {
   onEvent: AgentEventHandler;
   maxTurns?: number;
   signal?: AbortSignal;  // Esc-to-interrupt
+  conversationId?: string;  // threaded to backend so multi-turn chats stay in one DB row
 }
 
 // Pre-build the OpenAI tools array once — it never changes
@@ -192,7 +193,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
         ...messages,
       ];
 
-      for await (const event of streamCompletion(config, fullMessages, OPENAI_TOOLS, signal)) {
+      for await (const event of streamCompletion(config, fullMessages, OPENAI_TOOLS, signal, opts.conversationId)) {
         if (event.type === "text") {
           assistantText += event.content;
           await onEvent({ type: "chunk", text: event.content });

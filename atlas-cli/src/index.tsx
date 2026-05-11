@@ -599,6 +599,13 @@ function App({
 
   // Stable session ID for this run
   const sessionIdRef = useRef<string>(newSessionId());
+  // Stable conversation UUID for this run — sent to backend so all turns
+  // append to the same conversation row instead of creating a new one each turn.
+  const conversationIdRef = useRef<string>(
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}-4${Math.random().toString(16).slice(2, 5)}-8${Math.random().toString(16).slice(2, 5)}-${Math.random().toString(16).slice(2, 14)}`
+  );
 
   // Ctrl+C to quit · Esc to interrupt current response
   useInput((input, key) => {
@@ -949,6 +956,7 @@ function App({
                   workspaceRoot: workspace.cwd, audit,
                   onEvent: handleAgentEvent, maxTurns: 8,
                   signal: abort.signal,
+                  conversationId: conversationIdRef.current,
                 });
                 currentMessages = updated;
                 setMessages(updated);
@@ -1240,6 +1248,7 @@ function App({
             onEvent: handleAgentEvent,
             maxTurns: 15,
             signal: abort.signal,
+            conversationId: conversationIdRef.current,
           });
           setMessages(updatedMessages);
           if (u) setUsage(u);
@@ -1248,7 +1257,7 @@ function App({
           let fullText = "";
           let lastFlush = 0;
           const sysMessages: Message[] = [{ role: "system", content: systemPrompt }, ...nextMessages];
-          for await (const event of streamCompletion(config, sysMessages)) {
+          for await (const event of streamCompletion(config, sysMessages, undefined, abort.signal, conversationIdRef.current)) {
             if (event.type === "text") {
               fullText += event.content;
               const now = Date.now();

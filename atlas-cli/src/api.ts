@@ -67,7 +67,8 @@ function buildBody(
   config: AtlasConfig,
   messages: Message[],
   stream: boolean,
-  tools?: OpenAITool[]
+  tools?: OpenAITool[],
+  conversationId?: string
 ): string {
   const body: Record<string, unknown> = {
     model: config.model,
@@ -78,6 +79,9 @@ function buildBody(
   if (tools && tools.length > 0) {
     body.tools = tools;
     body.tool_choice = "auto";
+  }
+  if (conversationId) {
+    body.conversation_id = conversationId;
   }
   return JSON.stringify(body);
 }
@@ -104,7 +108,8 @@ export async function* streamCompletion(
   config: AtlasConfig,
   messages: Message[],
   tools?: OpenAITool[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  conversationId?: string
 ): AsyncGenerator<CompletionChunk, void, unknown> {
   let response: Response;
   // Combine user abort signal with the global fetch timeout
@@ -116,7 +121,7 @@ export async function* streamCompletion(
     response = await fetch(`${config.baseUrl}/chat/completions`, {
       method: "POST",
       headers: buildHeaders(config),
-      body: buildBody(config, messages, true, tools),
+      body: buildBody(config, messages, true, tools, conversationId),
       signal: combinedSignal,
     });
   } catch (err: unknown) {

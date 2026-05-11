@@ -341,6 +341,84 @@ async def responses_api(
             "distillation": result.distillation,
             "session_id": result.session_id,
         }
+
+        # Wrap the chunk iterator so we can capture full assistant text and
+        # persist the conversation after the stream completes. Without this
+        # wrapper the streaming path skipped persistence entirely.
+        async def _capturing_iter():
+            full_text_parts: list[str] = []
+            try:
+                async for chunk in result.chunk_iterator:
+                    # Extract text from OpenAI-style chunk (chat.completion.chunk shape)
+                    try:
+                        choices = getattr(chunk, "choices", None)
+                        if choices:
+                            delta = getattr(choices[0], "delta", None)
+                            content = getattr(delta, "content", None) if delta else None
+                            if content:
+                                full_text_parts.append(content)
+                    except Exception:
+                        pass
+                    yield chunk
+            finally:
+                full_text = "".join(full_text_parts) or (result.assistant_text or "")
+                # Persist in background with a fresh DB session — the request DB
+                # session is closed by the time the SSE stream finishes.
+                async def _persist_stream():
+                    from a1.db.engine import async_session as _mk_session
+                    try:
+                        async with _mk_session() as fresh:
+                            async with fresh.begin():
+                                conv_repo_s = ConversationRepo(fresh)
+                                msg_repo_s = MessageRepo(fresh)
+                                routing_repo_s = RoutingRepo(fresh)
+
+                                # Reuse caller-provided conversation_id if present,
+                                # otherwise create a new conversation row.
+                                conv_id = None
+                                try:
+                                    cid = (request.get("conversation_id")
+                                           or request.get("metadata", {}).get("conversation_id"))
+                                    if cid:
+                                        conv_id = uuid.UUID(cid)
+                                except Exception:
+                                    conv_id = None
+                                if not conv_id:
+                                    conv = await conv_repo_s.create(
+                                        source="proxy", user_id=request.get("user")
+                                    )
+                                    conv_id = conv.id
+
+                                seq = 0
+                                for m in messages:
+                                    await msg_repo_s.add(conv_id, m.role, m.content or "", seq)
+                                    seq += 1
+                                asst_msg = await msg_repo_s.add(
+                                    conv_id, "assistant", full_text, seq
+                                )
+                                await routing_repo_s.record(
+                                    message_id=asst_msg.id,
+                                    provider=result.provider_name,
+                                    model=result.model_name or model,
+                                    strategy=result.strategy,
+                                    task_type=result.task_type,
+                                    confidence=result.confidence,
+                                    latency_ms=result.latency_ms,
+                                    prompt_tokens=result.prompt_tokens,
+                                    completion_tokens=result.completion_tokens,
+                                    cost_usd=result.cost_usd,
+                                    is_local=result.is_local,
+                                    api_key_hash=api_key_hash,
+                                    self_healed=result.self_healed,
+                                    heal_score_before=result.quality_score
+                                    if result.self_healed else None,
+                                )
+                    except Exception as e:
+                        log.error(f"Failed to persist streaming conversation: {e}")
+
+                import asyncio as _asyncio
+                _asyncio.create_task(_persist_stream())
+
         return await _return_response_or_stream(
             True,
             result.response_id,
@@ -348,7 +426,7 @@ async def responses_api(
             None,
             {},
             meta,
-            chunk_iterator=result.chunk_iterator,
+            chunk_iterator=_capturing_iter(),
         )
 
     # Persist conversation (background-safe)
@@ -356,12 +434,26 @@ async def responses_api(
         conv_repo = ConversationRepo(db)
         msg_repo = MessageRepo(db)
         routing_repo = RoutingRepo(db)
-        conv = await conv_repo.create(source="proxy", user_id=request.get("user"))
+
+        # Honor caller-provided conversation_id so multi-turn chats append
+        # to one row instead of fragmenting across many.
+        conv_id = None
+        try:
+            cid = (request.get("conversation_id")
+                   or request.get("metadata", {}).get("conversation_id"))
+            if cid:
+                conv_id = uuid.UUID(cid)
+        except Exception:
+            conv_id = None
+        if not conv_id:
+            conv = await conv_repo.create(source="proxy", user_id=request.get("user"))
+            conv_id = conv.id
+
         seq = 0
         for m in messages:
-            await msg_repo.add(conv.id, m.role, m.content or "", seq)
+            await msg_repo.add(conv_id, m.role, m.content or "", seq)
             seq += 1
-        asst_msg = await msg_repo.add(conv.id, "assistant", result.assistant_text or "", seq)
+        asst_msg = await msg_repo.add(conv_id, "assistant", result.assistant_text or "", seq)
         await routing_repo.record(
             message_id=asst_msg.id,
             provider=result.provider_name,
