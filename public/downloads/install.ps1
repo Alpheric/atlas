@@ -46,16 +46,25 @@ if (-not $bunPath) {
 }
 
 # ── 2. Download Atlas CLI ─────────────────────────────────────────────────────
+# Download individual files directly instead of using tar. Not every
+# Windows install ships with tar, and the matching `tar -xzf` flow is
+# fragile across versions. The atlas.js + yoga.wasm pair is everything
+# the runtime needs.
 Write-Host "→ Downloading Atlas CLI..."
+$DistDir = Join-Path $INSTALL_DIR "dist"
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 New-Item -ItemType Directory -Force -Path $BIN_DIR     | Out-Null
-
-$tarFile = Join-Path $env:TEMP "atlas-cli.tar.gz"
-Invoke-WebRequest "$BASE_URL/downloads/atlas-cli.tar.gz" -OutFile $tarFile
+New-Item -ItemType Directory -Force -Path $DistDir     | Out-Null
 
 Write-Host "→ Installing to $INSTALL_DIR..."
-tar -xzf $tarFile -C $INSTALL_DIR --strip-components=1
-Remove-Item $tarFile
+Invoke-WebRequest "$BASE_URL/downloads/atlas.js"  -OutFile (Join-Path $DistDir "atlas.js")
+Invoke-WebRequest "$BASE_URL/downloads/yoga.wasm" -OutFile (Join-Path $DistDir "yoga.wasm")
+
+# Stamp version so the auto-updater can compare against the published version
+try {
+    $remoteVer = (Invoke-WebRequest "$BASE_URL/downloads/version.txt" -UseBasicParsing).Content.Trim()
+    Set-Content -Path (Join-Path $INSTALL_DIR "version.txt") -Value $remoteVer -NoNewline
+} catch {}
 
 # ── 3. Create atlas.cmd wrapper ───────────────────────────────────────────────
 $jsPath  = Join-Path $INSTALL_DIR "dist\atlas.js"
