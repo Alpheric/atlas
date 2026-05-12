@@ -92,7 +92,27 @@ class LiteLLMProvider(LLMProvider):
 
     def _build_kwargs(self, request: ChatCompletionRequest) -> dict:
         """Build kwargs for litellm.acompletion()."""
-        messages = [{"role": m.role, "content": m.content or ""} for m in request.messages]
+        # CRITICAL: preserve tool_calls (on assistant messages) and
+        # tool_call_id (on tool messages). Dropping them caused Gemini to
+        # reject the request with "Missing corresponding tool call for tool
+        # response message" and fall back to the buffered claude-cli path,
+        # which then hit the 1200s timeout on long agent runs.
+        messages = []
+        for m in request.messages:
+            msg: dict = {"role": m.role, "content": m.content or ""}
+            tc = getattr(m, "tool_calls", None)
+            if tc:
+                # tool_calls may be Pydantic models or plain dicts
+                msg["tool_calls"] = [
+                    t.model_dump() if hasattr(t, "model_dump") else t for t in tc
+                ]
+            tcid = getattr(m, "tool_call_id", None)
+            if tcid:
+                msg["tool_call_id"] = tcid
+            tname = getattr(m, "name", None)
+            if tname:
+                msg["name"] = tname
+            messages.append(msg)
 
         kwargs: dict = {
             "model": self._litellm_model(request.model),
