@@ -903,12 +903,33 @@ class CorePipeline:
                 log.info(f"[pipeline] tool request → vertex/{vertex_model}")
 
                 if inp.stream:
-                    result.chunk_iterator = _tool_complete_and_stream(
-                        vertex,
-                        req,
-                        timeout=float(settings.agent_execution_timeout),
-                        fallback=cli if cli_ok else None,
-                    )
+                    # Vertex (LiteLLM) supports streaming tool_calls natively.
+                    # Use real streaming so users see tokens as they arrive
+                    # instead of waiting up to 1200s for the full response
+                    # to buffer. The fallback to claude-cli only triggers
+                    # if vertex.stream() raises before yielding anything;
+                    # mid-stream failures will surface as a short response.
+                    req_stream = req.model_copy(update={"stream": True})
+
+                    async def _vertex_stream_with_fallback():
+                        try:
+                            async for chunk in vertex.stream(req_stream):
+                                yield chunk
+                            return
+                        except Exception as e:
+                            log.warning(
+                                f"[pipeline] vertex stream failed early ({e})"
+                                + (" — falling back to claude-cli buffered path" if cli_ok else "")
+                            )
+                            if not cli_ok:
+                                raise
+                        # Fallback path: buffered claude-cli
+                        async for chunk in _tool_complete_and_stream(
+                            cli, req, timeout=float(settings.agent_execution_timeout)
+                        ):
+                            yield chunk
+
+                    result.chunk_iterator = _vertex_stream_with_fallback()
                     result.provider_name = "vertex"
                     result.model_name = vertex_model
                     return

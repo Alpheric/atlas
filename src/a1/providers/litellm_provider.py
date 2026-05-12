@@ -172,6 +172,38 @@ class LiteLLMProvider(LLMProvider):
                 continue
 
             delta = chunk.choices[0].delta
+
+            # Forward tool_calls if present — without this, tool-call deltas
+            # are silently dropped and the pipeline falls back to a buffered
+            # non-streaming path that often times out on long generations.
+            tc_delta = getattr(delta, "tool_calls", None)
+            tc_list = None
+            if tc_delta:
+                tc_list = []
+                for tc in tc_delta:
+                    item: dict = {}
+                    idx = getattr(tc, "index", None)
+                    if idx is not None:
+                        item["index"] = idx
+                    tid = getattr(tc, "id", None)
+                    if tid:
+                        item["id"] = tid
+                    ttype = getattr(tc, "type", None)
+                    if ttype:
+                        item["type"] = ttype
+                    fn = getattr(tc, "function", None)
+                    if fn is not None:
+                        fn_obj: dict = {}
+                        name = getattr(fn, "name", None)
+                        args = getattr(fn, "arguments", None)
+                        if name:
+                            fn_obj["name"] = name
+                        if args is not None:
+                            fn_obj["arguments"] = args
+                        if fn_obj:
+                            item["function"] = fn_obj
+                    tc_list.append(item)
+
             yield ChatCompletionChunk(
                 id=chunk.id or chunk_id,
                 model=request.model,
@@ -180,6 +212,7 @@ class LiteLLMProvider(LLMProvider):
                         delta=DeltaMessage(
                             role=getattr(delta, "role", None),
                             content=getattr(delta, "content", None),
+                            tool_calls=tc_list,
                         ),
                         finish_reason=chunk.choices[0].finish_reason,
                     )
