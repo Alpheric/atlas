@@ -316,7 +316,11 @@ async def chat_completions(
         model=request.model,
         strategy=request.strategy or "best_quality",
         temperature=request.temperature,
-        max_tokens=request.max_tokens or 1000,
+        # 8192 default (was 1000): callers like Notifire that omit max_tokens
+        # were getting mid-sentence truncation on JSON-mode + long-form
+        # responses. 8k gives realistic room without exceeding Gemini /
+        # Claude output ceilings. Callers that want a hard cap still get it.
+        max_tokens=request.max_tokens or 8192,
         stream=request.stream,
         tools=normalized_tools,
         tool_choice=request.tool_choice,

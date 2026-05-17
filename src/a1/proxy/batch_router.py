@@ -169,7 +169,7 @@ async def _process_one(request_line: dict, api_key: str) -> dict:
             raw_user_input=next((m.content for m in reversed(req.messages) if m.role == "user"), "")
             or "",
             model=req.model,
-            max_tokens=req.max_tokens or 1000,
+            max_tokens=req.max_tokens or 8192,
             temperature=req.temperature,
             stream=False,
             tools=req.tools,
