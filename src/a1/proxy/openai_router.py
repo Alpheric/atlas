@@ -320,6 +320,7 @@ async def chat_completions(
         stream=request.stream,
         tools=normalized_tools,
         tool_choice=request.tool_choice,
+        response_format=request.response_format,
         session_id=request.session_id,
         previous_response_id=request.previous_response_id,
         user_id=request.user,

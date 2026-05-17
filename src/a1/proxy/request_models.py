@@ -120,6 +120,11 @@ class ChatCompletionRequest(BaseModel):
     frequency_penalty: float | None = None
     n: int | None = 1
     user: str | None = None
+    # OpenAI-style response_format. Forwarded to the provider so JSON-mode
+    # ({"type": "json_object"}) and structured-output schema requests reach
+    # Gemini / OpenAI / etc. Without this field the value was being dropped
+    # silently at the Pydantic boundary, so callers expecting JSON got prose.
+    response_format: dict | str | None = None
 
     # A1 extensions
     strategy: str | None = None  # best_quality, lowest_cost, lowest_latency

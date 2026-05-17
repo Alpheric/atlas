@@ -174,6 +174,11 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tool_choice"] = request.tool_choice
         if request.stop:
             kwargs["stop"] = request.stop
+        # OpenAI-style response_format ({"type":"json_object"} or json_schema).
+        # LiteLLM translates this per-provider — for Gemini it sets
+        # response_mime_type / response_schema on the generationConfig.
+        if request.response_format is not None:
+            kwargs["response_format"] = request.response_format
 
         return kwargs
 

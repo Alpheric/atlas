@@ -79,6 +79,10 @@ class CorePipelineInput:
     stream: bool = False
     tools: list | None = None
     tool_choice: str | None = None
+    # OpenAI-style response_format ({"type":"json_object"} or
+    # {"type":"json_schema","json_schema":{...}}). Forwarded all the way to
+    # the provider so callers asking for JSON actually get JSON back.
+    response_format: dict | str | None = None
     # When True the caller handles the tool-execution loop (e.g. Hermes runs tools
     # locally).  Atlas makes ONE provider call, returns tool_use blocks directly to
     # the client, and does NOT run execute_tool_loop server-side.
@@ -856,6 +860,9 @@ class CorePipeline:
                     max_tokens=inp.max_tokens,
                     temperature=inp.temperature,
                     stream=inp.stream,
+                    tools=inp.tools,
+                    tool_choice=inp.tool_choice,
+                    response_format=inp.response_format,
                 )
                 result.provider_name = "vertex"
                 result.model_name = model
