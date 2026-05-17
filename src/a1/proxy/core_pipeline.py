@@ -844,7 +844,10 @@ class CorePipeline:
         ):
             vertex = provider_registry.get_provider("vertex")
             if vertex and provider_registry.is_healthy("vertex"):
-                model = settings.vertex_default_model or "gemini-2.0-flash"
+                # Use the *forced-tenant* model, NOT vertex_default_model.
+                # Keeps cheap-tenant pinning (e.g. gemini-2.0-flash) independent
+                # of operator-tuned defaults for grounding/vision.
+                model = settings.vertex_forced_sources_model or "gemini-2.0-flash"
                 from a1.proxy.request_models import ChatCompletionRequest
 
                 req = ChatCompletionRequest(

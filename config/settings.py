@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # external services to a known-cheap, known-fast model. e.g. notifire →
     # gemini-2.0-flash. Falls back to normal routing if Vertex is unhealthy.
     vertex_forced_sources: list[str] = ["notifire"]    # A1_VERTEX_FORCED_SOURCES
+    # Model used when vertex_forced_sources matches. Kept distinct from
+    # vertex_default_model (which is used for grounding/vision and may be
+    # tuned for quality, e.g. gemini-2.5-pro) so cheap-tenant pinning and
+    # general Vertex defaults can be set independently.
+    vertex_forced_sources_model: str = "gemini-2.0-flash"  # A1_VERTEX_FORCED_SOURCES_MODEL
 
     # Ollama (supports multiple servers)
     ollama_base_url: str = "http://localhost:11434"
