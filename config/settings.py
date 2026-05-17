@@ -38,7 +38,9 @@ class Settings(BaseSettings):
     # vertex_default_model (which is used for grounding/vision and may be
     # tuned for quality, e.g. gemini-2.5-pro) so cheap-tenant pinning and
     # general Vertex defaults can be set independently.
-    vertex_forced_sources_model: str = "gemini-2.0-flash"  # A1_VERTEX_FORCED_SOURCES_MODEL
+    # NB: gemini-2.0-flash returns 404 ("no longer available to new users")
+    # against the Google AI Studio endpoint, so the default is 2.5-flash.
+    vertex_forced_sources_model: str = "gemini-2.5-flash"  # A1_VERTEX_FORCED_SOURCES_MODEL
 
     # Ollama (supports multiple servers)
     ollama_base_url: str = "http://localhost:11434"
