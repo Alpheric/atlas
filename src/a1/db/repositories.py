@@ -159,6 +159,8 @@ class RoutingRepo:
         account_id: uuid.UUID | None = None,
         self_healed: bool = False,
         heal_score_before: float | None = None,
+        web_search_grounded: bool = False,
+        grounding_metadata: str | None = None,
     ) -> RoutingDecision:
         decision = RoutingDecision(
             message_id=message_id,
@@ -179,6 +181,8 @@ class RoutingRepo:
             account_id=account_id,
             self_healed=self_healed,
             heal_score_before=heal_score_before,
+            web_search_grounded=web_search_grounded,
+            grounding_metadata=grounding_metadata,
         )
         self.session.add(decision)
         await self.session.flush()

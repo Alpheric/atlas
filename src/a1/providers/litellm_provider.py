@@ -114,6 +114,40 @@ class LiteLLMProvider(LLMProvider):
                 msg["name"] = tname
             messages.append(msg)
 
+        # Defensive sanitisation for Gemini/Vertex strict validation.
+        # Vertex rejects the entire request with "Missing corresponding tool
+        # call for tool response message" if a `tool` message's tool_call_id
+        # doesn't match a tool_call on an earlier assistant message. Clients
+        # (and our own session replay) sometimes send incomplete histories
+        # where the assistant message's tool_calls got stripped — leaving
+        # orphan tool results that crash the whole turn. Drop them instead.
+        seen_call_ids: set[str] = set()
+        sanitized: list[dict] = []
+        dropped = 0
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc_item in msg["tool_calls"]:
+                    if isinstance(tc_item, dict):
+                        cid = tc_item.get("id")
+                        if cid:
+                            seen_call_ids.add(cid)
+                sanitized.append(msg)
+            elif msg.get("role") == "tool":
+                cid = msg.get("tool_call_id")
+                if cid and cid in seen_call_ids:
+                    sanitized.append(msg)
+                else:
+                    dropped += 1
+            else:
+                sanitized.append(msg)
+        if dropped:
+            log.warning(
+                f"[litellm/{self.name}] Dropped {dropped} orphan tool message(s) "
+                "with no matching assistant tool_call — incomplete history from "
+                "caller or session replay."
+            )
+        messages = sanitized
+
         kwargs: dict = {
             "model": self._litellm_model(request.model),
             "messages": messages,

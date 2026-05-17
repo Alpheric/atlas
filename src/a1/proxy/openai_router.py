@@ -109,7 +109,28 @@ async def _persist_conversation(
             meta["tenant_id"] = tenant_id
 
         conv_id = uuid.UUID(inp.conversation_id) if inp.conversation_id else None
-        if not conv_id:
+        if conv_id:
+            # Caller supplied a conversation_id — ensure the parent row exists
+            # before we insert messages, otherwise the FK on messages.conversation_id
+            # blows up with an IntegrityError.
+            from sqlalchemy import select as _select
+
+            from a1.db.models import Conversation
+
+            existing = await session.execute(
+                _select(Conversation.id).where(Conversation.id == conv_id)
+            )
+            if existing.scalar_one_or_none() is None:
+                session.add(
+                    Conversation(
+                        id=conv_id,
+                        source=source,
+                        user_id=inp.user_id,
+                        metadata_=meta or {},
+                    )
+                )
+                await session.flush()
+        else:
             conv = await conv_repo.create(
                 source=source,
                 user_id=inp.user_id,

@@ -213,7 +213,23 @@ async def delete_account(account_id: str, db: AsyncSession = Depends(get_db)):
     from a1.db.models import ProviderAccount
     from a1.providers.key_pool import key_pool
 
-    await db.execute(sql_delete(ProviderAccount).where(ProviderAccount.id == uuid.UUID(account_id)))
+    # CLI pool accounts (IDs like "cli:neeraj") are derived from server config,
+    # not stored in the DB. They can't be deleted via this endpoint.
+    if account_id.startswith("cli:"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "CLI pool accounts cannot be deleted via this endpoint. "
+                "Remove the unix user from the Claude CLI pool configuration instead."
+            ),
+        )
+
+    try:
+        account_uuid = uuid.UUID(account_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid account_id: {account_id}") from e
+
+    await db.execute(sql_delete(ProviderAccount).where(ProviderAccount.id == account_uuid))
     await key_pool.load_accounts()
     return {"status": "deleted"}
 
