@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 
-from fastapi import HTTPException, Security
+from fastapi import HTTPException, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 
@@ -211,7 +211,42 @@ async def _update_key_last_used(key_hash: str) -> None:
         pass  # non-critical
 
 
+def _client_ip(request: Request | None) -> str:
+    """Best-effort real client IP, accounting for Cloudflare / reverse-proxy headers.
+
+    Order: cf-connecting-ip → first hop of X-Forwarded-For → request.client.host.
+    """
+    if request is None:
+        return "-"
+    headers = request.headers
+    cf = headers.get("cf-connecting-ip")
+    if cf:
+        return cf
+    xff = headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "-"
+
+
+def _log_invalid_key(request: Request | None, key: str, route: str) -> None:
+    """WARN-level audit log for a rejected key attempt.
+
+    Records only the first/last 4 chars of the key so the full secret isn't
+    leaked into logs but operators can still correlate repeated probes.
+    """
+    ip = _client_ip(request)
+    ua = (request.headers.get("user-agent", "-") if request is not None else "-")[:80]
+    if key and len(key) >= 9:
+        masked = f"{key[:4]}…{key[-4:]}"
+    else:
+        masked = "<empty>"
+    log.warning(
+        f"Invalid API key on {route} from ip={ip} key={masked} ua={ua}"
+    )
+
+
 async def verify_api_key(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(security),
 ) -> str:
     """Verify API key from Bearer token and enforce rate limits. Returns the raw key.
@@ -245,6 +280,7 @@ async def verify_api_key(
 
     # 3 & 4. DB keys (atlas_api_keys tenant keys + api_keys dashboard keys)
     if not await _verify_key_in_db(key_h):
+        _log_invalid_key(request, key, str(request.url.path))
         raise HTTPException(status_code=403, detail="Invalid API key")
 
     # Valid DB key — update last_used timestamp in background
@@ -259,6 +295,7 @@ async def verify_api_key(
 
 
 async def get_auth_context(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(security),
 ) -> AuthContext:
     """Full auth resolution: verify key, resolve workspace and role.
@@ -273,6 +310,7 @@ async def get_auth_context(
 
     key = credentials.credentials
     if key not in settings.api_keys:
+        _log_invalid_key(request, key, str(request.url.path))
         raise HTTPException(status_code=403, detail="Invalid API key")
 
     key_h = hash_key(key)
