@@ -289,6 +289,27 @@ class ProviderRegistry:
             status = "healthy" if self._health[name] else "unhealthy"
             log.info(f"Provider {name}: {status}")
 
+    async def aclose_all(self) -> None:
+        """Close persistent HTTP clients held by registered providers.
+
+        Called at app shutdown to avoid 'Unclosed client session' warnings.
+        Providers that don't expose aclose() are silently skipped.
+        """
+        coros = []
+        for name, provider in self._providers.items():
+            aclose = getattr(provider, "aclose", None)
+            if callable(aclose):
+                coros.append((name, aclose()))
+        if not coros:
+            return
+        results = await asyncio.gather(
+            *(c for _, c in coros), return_exceptions=True
+        )
+        for (name, _), result in zip(coros, results, strict=False):
+            if isinstance(result, Exception):
+                log.warning(f"Error closing provider {name}: {result}")
+        log.info(f"Closed {len(coros)} provider client(s)")
+
     def get_provider(self, name: str) -> LLMProvider | None:
         return self._providers.get(name)
 

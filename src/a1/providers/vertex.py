@@ -781,3 +781,10 @@ class VertexProvider(LLMProvider):
                 return resp.status_code == 200
             except Exception:
                 return False
+
+    async def aclose(self) -> None:
+        """Release the persistent httpx.AsyncClient. Called at app shutdown."""
+        try:
+            await self._client.aclose()
+        except Exception:
+            pass

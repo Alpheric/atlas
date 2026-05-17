@@ -101,6 +101,16 @@ class SearchProviderRegistry:
             {"name": p.name, "healthy": self._healthy.get(p.name, True)} for p in self._providers
         ]
 
+    async def aclose_all(self) -> None:
+        """Close all registered providers' HTTP clients. Called at app shutdown."""
+        if not self._providers:
+            return
+        await asyncio.gather(
+            *(p.aclose() for p in self._providers),
+            return_exceptions=True,
+        )
+        log.info(f"Closed {len(self._providers)} search provider client(s)")
+
 
 # Singleton — initialised at app startup from config/settings.py
 search_registry = SearchProviderRegistry()

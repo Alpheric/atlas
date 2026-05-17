@@ -188,6 +188,23 @@ async def lifespan(app: FastAPI):
     if _arq_pool:
         await _arq_pool.aclose()
 
+    # Close persistent HTTP clients held by provider + search registries.
+    # Without this, aiohttp/httpx warns 'Unclosed client session' at GC time.
+    # NB: third-party libs (LiteLLM, etc.) may still leak their own internal
+    # sessions — those have to be patched upstream.
+    try:
+        from a1.providers.registry import provider_registry as _pr
+
+        await _pr.aclose_all()
+    except Exception as _e:
+        _startup_log.warning(f"Provider registry shutdown error: {_e}")
+    try:
+        from a1.search.providers.registry import search_registry as _sr
+
+        await _sr.aclose_all()
+    except Exception as _e:
+        _startup_log.warning(f"Search registry shutdown error: {_e}")
+
 
 def create_app() -> FastAPI:
     app = FastAPI(

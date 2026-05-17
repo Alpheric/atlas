@@ -41,3 +41,17 @@ class SearchProvider(ABC):
     def estimate_cost(self, query_count: int) -> float:
         """Estimate USD cost for `query_count` searches (approximate)."""
         return 0.0
+
+    async def aclose(self) -> None:
+        """Release any held network resources (HTTP clients, etc.).
+
+        Default: best-effort close of `self._client` if it exposes `aclose`.
+        Override for providers with multiple clients or custom shutdown logic.
+        """
+        client = getattr(self, "_client", None)
+        if client is not None and hasattr(client, "aclose"):
+            try:
+                await client.aclose()
+            except Exception:
+                # Shutdown path — don't propagate, just leave a trace.
+                pass
