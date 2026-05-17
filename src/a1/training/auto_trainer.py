@@ -117,7 +117,20 @@ def _inject_atlas_identity(request, atlas_model: str) -> None:
         request.messages.insert(0, MessageInput(role="system", content=atlas_system))
 
 
-_DISTILL_TIMEOUT = 30  # seconds — skip if local model is too slow
+def _distill_timeout() -> int:
+    """Lazy lookup of the configurable per-run local-model timeout (seconds).
+
+    Falls back to 30 only if settings can't be loaded for some reason — keeps
+    the module importable in tooling contexts where the full app isn't booted.
+    """
+    try:
+        from config.settings import settings as _s
+
+        return int(_s.distillation_local_timeout_seconds)
+    except Exception:
+        return 30
+
+
 _DISTILL_MAX_INPUT = 2000  # chars — truncate long prompts for local
 # Prefer fastest available local models for distillation comparison
 # (Reflects actually-available Ollama models; remove unavailable models)
@@ -204,10 +217,11 @@ async def _run_local_model(
         max_tokens=500,  # short response for comparison
     )
     start = time.time()
+    timeout_s = _distill_timeout()
     try:
         local_result = await asyncio.wait_for(
             local_provider.complete(local_req),
-            timeout=_DISTILL_TIMEOUT,
+            timeout=timeout_s,
         )
         return {
             "text": (local_result.choices[0].message.content if local_result.choices else ""),
@@ -217,7 +231,7 @@ async def _run_local_model(
             "model": local_model_name,
         }
     except asyncio.TimeoutError:
-        log.warning(f"Local model {local_model_name} timed out after {_DISTILL_TIMEOUT}s, skipping")
+        log.warning(f"Local model {local_model_name} timed out after {timeout_s}s, skipping")
         return {
             "text": None,
             "latency_ms": int((time.time() - start) * 1000),
@@ -226,7 +240,12 @@ async def _run_local_model(
             "model": local_model_name,
         }
     except Exception as e:
-        log.warning(f"Local model run failed for {local_model_name}: {e}")
+        # Some httpx / ollama exceptions have an empty str() — surface the type
+        # too so operators can tell a ConnectError from a ResponseError etc.
+        log.warning(
+            f"Local model run failed for {local_model_name}: "
+            f"{type(e).__name__}: {e or '(no message)'}"
+        )
         return {
             "text": None,
             "latency_ms": int((time.time() - start) * 1000),
@@ -633,6 +652,24 @@ async def _background_local_comparison(
         similarity = 0.0
         if local_text and claude_response_text:
             similarity = _compute_similarity(claude_response_text, local_text)
+
+        # Skip samples where the local student produced nothing (or zero overlap
+        # with the teacher) — they pollute the training set with empty rows and
+        # inflate the "samples" counter without giving the trainer anything
+        # learnable. Disable via A1_DISTILLATION_SKIP_ZERO_SIMILARITY=false.
+        try:
+            from config.settings import settings as _s
+
+            _skip_zero = bool(_s.distillation_skip_zero_similarity)
+        except Exception:
+            _skip_zero = True
+        if _skip_zero and (not local_text or similarity == 0.0):
+            log.info(
+                f"Distillation: task={task_type} similarity={similarity:.2f} "
+                f"claude={claude_latency_ms}ms local={local_latency}ms "
+                "— skipped (no local output or zero similarity)"
+            )
+            return
 
         # Store dual execution record
         try:

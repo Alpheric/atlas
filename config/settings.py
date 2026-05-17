@@ -112,6 +112,16 @@ class Settings(BaseSettings):
     # route to local model directly (if healthy) without waiting for full training.
     # Set to 0 to disable. Default: 10 — enough to warm up Ollama without training.
     distillation_task_repeat_threshold: int = 10
+    # Per-request timeout for the local "student" model during distillation.
+    # Hit by qwen2.5-coder:7b on slower / loaded GPU servers — bumped from the
+    # original 30s after observing ~44% of distillation runs timing out (and
+    # producing similarity=0.00 samples that polluted the training set).
+    distillation_local_timeout_seconds: int = 90
+    # When True, distillation samples where the local student produced no
+    # text (or scored exactly 0.0 against the teacher) are NOT persisted as
+    # training data. Stops the dataset from filling with zeros when the
+    # local model is too slow / broken.
+    distillation_skip_zero_similarity: bool = True
 
     # Session memory
     session_enabled: bool = True
