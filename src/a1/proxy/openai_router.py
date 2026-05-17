@@ -77,6 +77,38 @@ async def _resolve_conv_source(api_key_hash: str | None) -> tuple[str, str | Non
     except Exception:
         pass
 
+    # 3. Dashboard-issued keys (api_keys table) — derive a "source" label
+    # from the owning user's email local-part so tenants like
+    # notifire@alpheric.com → source="notifire". This makes
+    # vertex_forced_sources work for keys created via the dashboard,
+    # not just the provisioning API.
+    try:
+        from sqlalchemy import select as _select
+
+        from a1.db.engine import async_session
+        from a1.db.models import ApiKey, User
+
+        async with async_session() as db:
+            row = (
+                await db.execute(
+                    _select(User.email)
+                    .join(ApiKey, ApiKey.user_id == User.id)
+                    .where(
+                        ApiKey.key_hash == api_key_hash,
+                        ApiKey.is_active.is_(True),
+                    )
+                )
+            ).first()
+            if row and row.email:
+                local_part = row.email.split("@", 1)[0].lower()
+                # Conservative slug: keep alnum + dash + underscore so the
+                # source label stays predictable across configs.
+                slug = "".join(c if c.isalnum() or c in "-_" else "" for c in local_part)
+                if slug:
+                    return slug, None
+    except Exception:
+        pass
+
     return "proxy", None
 
 
