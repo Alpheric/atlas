@@ -323,11 +323,24 @@ class ClaudeCLIProvider(LLMProvider):
         )
 
         if code != 0:
-            log.error(f"Claude CLI exit={code} stderr={stderr[:500] if stderr else 'empty'}")
+            # Give operators enough context to diagnose silent failures.
+            # The CLI sometimes exits non-zero with empty stderr (e.g. when an
+            # MCP config rejection happens early) — in those cases stdout is
+            # the only signal we have. Always log both, plus the account
+            # context (which CLI binary, which unix user) so we can correlate
+            # with the right ~/.claude credentials.
+            unix_user = getattr(self, "unix_user", None)
+            account = f" account={unix_user}" if unix_user else ""
+            stderr_snip = stderr[:500] if stderr else "empty"
+            stdout_snip = output[:500] if output else "empty"
+            log.error(
+                f"Claude CLI exit={code}{account} cli={self._cli_path} "
+                f"stderr={stderr_snip} stdout={stdout_snip}"
+            )
             if not output:
-                raise RuntimeError(
-                    f"Claude CLI exit code {code}: {stderr[:300] if stderr else 'no output'}"
-                )
+                # No stdout at all — surface stderr (or note it was empty too).
+                detail = stderr[:300] if stderr else "no output on stdout or stderr"
+                raise RuntimeError(f"Claude CLI exit code {code}: {detail}")
 
         # Parse JSON response for accurate token counts
         try:
