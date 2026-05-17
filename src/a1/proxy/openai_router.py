@@ -234,6 +234,17 @@ def _normalize_tools(tools: list | None) -> tuple[list | None, bool]:
 # ---------------------------------------------------------------------------
 
 
+_IMAGE_MODEL_NAMES = {
+    "atlas-image",
+    "atlas-image-pro",
+    "nano-banana",
+    "nano-banana-pro",
+    "gemini-image",
+    "gemini-3-pro-image-preview",
+    "gemini-2.5-flash-image",
+}
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(
     request: ChatCompletionRequest,
@@ -241,6 +252,17 @@ async def chat_completions(
     api_key: str = Depends(verify_api_key),
     db: AsyncSession = Depends(get_db),
 ):
+    # Image-generation models cannot run through the chat pipeline — direct callers
+    # to the dedicated image endpoint instead of failing deep in the pipeline.
+    if request.model and request.model.lower() in _IMAGE_MODEL_NAMES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Model '{request.model}' generates images, not chat. "
+                f"Use POST /v1/images/generations with this model instead."
+            ),
+        )
+
     api_key_hash = hash_key(api_key) if api_key != "dev" else None
     rid = request_id_var.get("")
 
@@ -255,6 +277,7 @@ async def chat_completions(
         request_id=rid or f"chatcmpl-{uuid.uuid4().hex[:12]}",
         source="openai",
         api_key_hash=api_key_hash,
+        tenant_source=source,  # atlas_api_keys.source → "notifire", "onedesk", …
         messages=list(request.messages),
         raw_user_input=next((m.content for m in reversed(request.messages) if m.role == "user"), "")
         or "",
@@ -487,6 +510,16 @@ async def list_models(api_key: str = Depends(verify_api_key)):
                 "owned_by": "alpheric.ai",
                 "context_window": 200000,
                 "description": "Compliance auditing, log analysis, structured extraction",
+            },
+            {
+                "id": "atlas-image",
+                "object": "model",
+                "owned_by": "alpheric.ai",
+                "context_window": 0,
+                "description": (
+                    "Image generation (Nano Banana Pro). "
+                    "Use POST /v1/images/generations — not /v1/chat/completions."
+                ),
             },
             {"id": "auto", "object": "model", "owned_by": "alpheric.ai", "context_window": 200000},
             {

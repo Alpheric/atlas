@@ -60,6 +60,10 @@ class CorePipelineInput:
     source: str = "openai"  # "openai" | "atlas" | "responses"
     api_key_hash: str | None = None
     workspace_id: str | None = None
+    # atlas_api_keys.source value resolved at the entry point ("onedesk",
+    # "notifire", "proxy", …). Used by routing to pin specific tenants to
+    # specific providers via settings.vertex_forced_sources.
+    tenant_source: str | None = None
 
     # Messages (already normalized to MessageInput list)
     messages: list = field(default_factory=list)
@@ -827,6 +831,56 @@ class CorePipeline:
         atlas_model: str | None,
     ):
         """Route request to provider and execute."""
+        # Forced-tenant override: tenants listed in A1_VERTEX_FORCED_SOURCES
+        # always run on Vertex/Gemini regardless of normal routing. Used to
+        # pin specific external services (e.g. notifire) to a known-cheap,
+        # known-fast model. Falls through to normal routing if vertex is
+        # unhealthy so the tenant still gets a response.
+        forced_sources = settings.vertex_forced_sources or []
+        if (
+            inp.tenant_source
+            and inp.tenant_source in forced_sources
+            and not getattr(inp, "force_provider", None)
+        ):
+            vertex = provider_registry.get_provider("vertex")
+            if vertex and provider_registry.is_healthy("vertex"):
+                model = settings.vertex_default_model or "gemini-2.0-flash"
+                from a1.proxy.request_models import ChatCompletionRequest
+
+                req = ChatCompletionRequest(
+                    model=model,
+                    messages=inp.messages,
+                    max_tokens=inp.max_tokens,
+                    temperature=inp.temperature,
+                    stream=inp.stream,
+                )
+                result.provider_name = "vertex"
+                result.model_name = model
+                result.atlas_model = atlas_model  # keep dashboard attribution
+                result.is_local = False
+                result.strategy = "forced_tenant"
+                result.routing_reason = f"forced-tenant:{inp.tenant_source}->{model}"
+                log.info(
+                    f"[pipeline] tenant_source={inp.tenant_source} → forcing vertex/{model}"
+                )
+                if inp.stream:
+                    result.chunk_iterator = vertex.stream(req)
+                    return
+                resp = await vertex.complete(req)
+                result.assistant_text = (
+                    resp.choices[0].message.content if resp.choices else ""
+                )
+                result.prompt_tokens = resp.usage.prompt_tokens
+                result.completion_tokens = resp.usage.completion_tokens
+                result.cost_usd = vertex.estimate_cost(
+                    resp.usage.prompt_tokens, resp.usage.completion_tokens, model
+                )
+                return
+            log.warning(
+                f"[pipeline] tenant_source={inp.tenant_source} should force vertex "
+                "but vertex unhealthy — falling through to normal routing"
+            )
+
         # Vision detection: if any message has image content, force Vertex (only vision provider).
         has_vision = any(
             getattr(m, "has_images", False) for m in inp.messages if not isinstance(m, dict)

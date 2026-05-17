@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     vertex_default_model: str = "gemini-2.0-flash"     # A1_VERTEX_DEFAULT_MODEL
     vertex_web_search_enabled: bool = False            # A1_VERTEX_WEB_SEARCH_ENABLED
     vertex_timeout: float = 60.0                       # A1_VERTEX_TIMEOUT
+    # Tenant sources (atlas_api_keys.source values) whose requests are forced
+    # to Vertex/Gemini regardless of normal routing. Used to pin specific
+    # external services to a known-cheap, known-fast model. e.g. notifire →
+    # gemini-2.0-flash. Falls back to normal routing if Vertex is unhealthy.
+    vertex_forced_sources: list[str] = ["notifire"]    # A1_VERTEX_FORCED_SOURCES
 
     # Ollama (supports multiple servers)
     ollama_base_url: str = "http://localhost:11434"
@@ -45,6 +50,7 @@ class Settings(BaseSettings):
     atlas_models: list[str] = [
         "atlas-plan", "atlas-code", "atlas-secure",
         "atlas-infra", "atlas-data", "atlas-books", "atlas-audit",
+        "atlas-image",
     ]
 
     # Proxy auth
