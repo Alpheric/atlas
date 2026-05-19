@@ -302,6 +302,8 @@ async def _sse_messages_stream(
     model: str,
     chunk_iterator,
     input_tokens: int,
+    *,
+    persist_cb=None,
 ) -> StreamingResponse:
     """Emit Anthropic Messages API SSE event sequence.
 
@@ -354,6 +356,7 @@ async def _sse_messages_stream(
         output_tokens = 0
         last_ping = time.monotonic()
         ping_interval = 10.0
+        full_text_parts: list[str] = []
 
         async for chunk in chunk_iterator:
             # Periodic ping to prevent proxy/client timeouts on long generations
@@ -364,6 +367,7 @@ async def _sse_messages_stream(
 
             if chunk.choices and chunk.choices[0].delta.content:
                 delta_text = chunk.choices[0].delta.content
+                full_text_parts.append(delta_text)
                 output_tokens += 1  # rough count — provider may send usage in final chunk
                 yield _evt(
                     "content_block_delta",
@@ -377,6 +381,14 @@ async def _sse_messages_stream(
             # Use accurate token count from provider's final usage chunk
             if chunk.usage:
                 output_tokens = chunk.usage.completion_tokens
+
+        # Persist conversation now that we have the full assistant text.
+        # Wrapped in try/except — persistence failure must not break the SSE.
+        if persist_cb is not None:
+            try:
+                await persist_cb("".join(full_text_parts), output_tokens)
+            except Exception as _e:
+                log.error(f"messages_router stream persist failed: {_e}")
 
         # 5. content_block_stop
         yield _evt("content_block_stop", {"type": "content_block_stop", "index": 0})
@@ -524,11 +536,67 @@ async def messages_api(
 
     # --- Streaming ---
     if result.chunk_iterator:
+        # Build a persist callback so the streaming path saves to the
+        # conversations table after the stream ends. Without this, every
+        # streaming /v1/messages request was invisible in the dashboard.
+        async def _persist_stream(full_text: str, output_tokens: int) -> None:
+            from a1.db.engine import async_session as _mk_session
+            try:
+                async with _mk_session() as fresh:
+                    async with fresh.begin():
+                        conv_repo_s = ConversationRepo(fresh)
+                        msg_repo_s = MessageRepo(fresh)
+                        routing_repo_s = RoutingRepo(fresh)
+
+                        # Honor caller-supplied conversation_id when present.
+                        import uuid as _uuid
+                        conv_id = None
+                        try:
+                            cid = (body.get("conversation_id")
+                                   or (body.get("metadata") or {}).get("conversation_id"))
+                            if cid:
+                                conv_id = _uuid.UUID(cid)
+                        except Exception:
+                            conv_id = None
+                        if not conv_id:
+                            conv = await conv_repo_s.create(
+                                source="anthropic", user_id=body.get("user")
+                            )
+                            conv_id = conv.id
+
+                        seq = 0
+                        for m in pipeline_messages:
+                            await msg_repo_s.add(conv_id, m.role, m.content or "", seq)
+                            seq += 1
+                        asst_msg = await msg_repo_s.add(
+                            conv_id, "assistant", full_text, seq
+                        )
+                        await routing_repo_s.record(
+                            message_id=asst_msg.id,
+                            provider=result.provider_name,
+                            model=result.model_name or model,
+                            strategy=result.strategy,
+                            task_type=result.task_type,
+                            confidence=result.confidence,
+                            latency_ms=result.latency_ms,
+                            prompt_tokens=result.prompt_tokens,
+                            completion_tokens=output_tokens or result.completion_tokens,
+                            cost_usd=result.cost_usd,
+                            is_local=result.is_local,
+                            api_key_hash=api_key_hash,
+                            self_healed=result.self_healed,
+                            heal_score_before=result.quality_score
+                            if result.self_healed else None,
+                        )
+            except Exception as e:
+                log.error(f"Failed to persist streaming /v1/messages conversation: {e}")
+
         return await _sse_messages_stream(
             result.response_id,
             result.model_name or model,
             result.chunk_iterator,
             result.prompt_tokens,
+            persist_cb=_persist_stream,
         )
 
     # --- Non-streaming ---
