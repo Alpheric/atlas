@@ -944,6 +944,13 @@ class CorePipeline:
         # Tool requests: bypass distillation & fast-path.
         # Priority: Vertex (Gemini native function calling) → claude-cli fallback.
         # Vertex has its own quota independent of Claude CLI accounts.
+        #
+        # EXCEPTION: Anthropic-format clients (Claude CLI, Anthropic SDK
+        # pointed at Atlas via /v1/messages) expect Claude-shaped responses
+        # — tool blocks, system prompt semantics, reasoning style. Routing
+        # them to Gemini silently produces broken tool calls and confusing
+        # responses. For these clients we flip priority: claude-cli first,
+        # vertex only as fallback if claude-cli is unhealthy.
         if inp.tools and atlas_model:
             from a1.proxy.request_models import ChatCompletionRequest
 
@@ -951,6 +958,48 @@ class CorePipeline:
             cli = provider_registry.get_provider("claude-cli")
             vertex_ok = bool(vertex and provider_registry.is_healthy("vertex"))
             cli_ok = bool(cli and provider_registry.is_healthy("claude-cli"))
+
+            prefer_claude = inp.source == "anthropic"
+
+            if prefer_claude and cli_ok:
+                # Anthropic-format client → use claude-cli directly.
+                from a1.training.auto_trainer import _get_external_provider
+
+                _, _, ext_model = _get_external_provider(atlas_model)
+                cli_model = ext_model or atlas_model
+                req = ChatCompletionRequest(
+                    model=cli_model,
+                    messages=inp.messages,
+                    max_tokens=inp.max_tokens,
+                    temperature=inp.temperature,
+                    stream=False,
+                    tools=inp.tools,
+                    tool_choice=inp.tool_choice,
+                )
+                log.info(
+                    f"[pipeline] anthropic-source tool request → claude-cli/{cli_model}"
+                )
+                if inp.stream:
+                    result.chunk_iterator = _tool_complete_and_stream(
+                        cli, req, timeout=float(settings.agent_execution_timeout)
+                    )
+                    result.provider_name = "claude-cli"
+                    result.model_name = atlas_model
+                    return
+                resp = await cli.complete(req)
+                result.raw_response = resp
+                result.provider_name = "claude-cli"
+                result.model_name = atlas_model
+                result.prompt_tokens = resp.usage.prompt_tokens if resp.usage else 0
+                result.completion_tokens = resp.usage.completion_tokens if resp.usage else 0
+                result.total_tokens = resp.usage.total_tokens if resp.usage else 0
+                result.cost_usd = cli.estimate_cost(
+                    result.prompt_tokens, result.completion_tokens, cli_model
+                )
+                result.assistant_text = (
+                    resp.choices[0].message.content if resp.choices else ""
+                )
+                return
 
             if vertex_ok:
                 _vdm = settings.vertex_default_model
