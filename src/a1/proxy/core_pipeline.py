@@ -207,7 +207,12 @@ async def _tool_complete_and_stream(provider, req, timeout: float | None = None,
             model=model,
             choices=[
                 StreamChoice(
-                    delta=DeltaMessage(content=f"Request timed out after {settings.agent_execution_timeout}s. The model took too long to respond — please try again."),
+                    delta=DeltaMessage(
+                        content=(
+                            f"Request timed out after {settings.agent_execution_timeout}s. "
+                            "The model took too long to respond — please try again."
+                        )
+                    ),
                     finish_reason="stop",
                 )
             ],
@@ -1483,7 +1488,7 @@ class CorePipeline:
         # Step 8: Cache store
         # Guard: never cache error responses from the CLI or provider — they look like
         # valid text ("Not logged in", "Claude CLI exit code 1", etc.) but are poison.
-        _CACHE_POISON_SIGNALS = (
+        _CACHE_POISON_SIGNALS = (  # noqa: N806
             "not logged in",
             "authentication",
             "cli exit code",

@@ -509,7 +509,9 @@ async def cost_by_workspace(
                 UsageRecord.workspace_id,
                 func.count().label("requests"),
                 func.coalesce(func.sum(UsageRecord.prompt_tokens), 0).label("prompt_tokens"),
-                func.coalesce(func.sum(UsageRecord.completion_tokens), 0).label("completion_tokens"),
+                func.coalesce(func.sum(UsageRecord.completion_tokens), 0).label(
+                    "completion_tokens"
+                ),
                 func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("cost_usd"),
                 func.coalesce(
                     func.sum(UsageRecord.equivalent_external_cost_usd), 0
@@ -592,7 +594,9 @@ async def cost_by_key(
                 UsageRecord.api_key_hash,
                 func.count().label("requests"),
                 func.coalesce(func.sum(UsageRecord.prompt_tokens), 0).label("prompt_tokens"),
-                func.coalesce(func.sum(UsageRecord.completion_tokens), 0).label("completion_tokens"),
+                func.coalesce(func.sum(UsageRecord.completion_tokens), 0).label(
+                    "completion_tokens"
+                ),
                 func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("cost_usd"),
                 func.coalesce(
                     func.sum(case((UsageRecord.error.is_(True), 1), else_=0)), 0

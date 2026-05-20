@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Callable
+
 from a1.common.logging import get_logger
 
 log = get_logger("mcp.auth")
@@ -56,8 +57,8 @@ async def _is_valid_key(key: str) -> bool:
     if not key:
         return False
     try:
+        from a1.common.auth import _verify_key_in_db, hash_key
         from config.settings import settings
-        from a1.common.auth import hash_key, _verify_key_in_db
 
         # Master env keys
         if key in (settings.api_keys or []):

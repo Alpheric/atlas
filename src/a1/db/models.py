@@ -1310,7 +1310,8 @@ class PromptVersion(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(128), nullable=False)  # logical key, e.g. "self_critique"
+    # logical key, e.g. "self_critique"
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # Optional model scoping (e.g. an atlas-code-specific suffix). NULL = global.

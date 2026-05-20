@@ -248,6 +248,11 @@ def create_app() -> FastAPI:
 
     app.include_router(veo_router)
 
+    # Imagen / Nano Banana Pro — atlas-image generation endpoints
+    from a1.proxy.images_router import router as images_router
+
+    app.include_router(images_router)
+
     # Prometheus /metrics endpoint
     from a1.common.prometheus import router as prometheus_router
 
@@ -259,8 +264,8 @@ def create_app() -> FastAPI:
     app.include_router(provisioning_router)
 
     # MCP server — mount SSE transport at /mcp (protected by API key middleware)
-    from a1.mcp.server import mcp as _mcp
     from a1.mcp.auth import MCPAuthMiddleware
+    from a1.mcp.server import mcp as _mcp
 
     _mcp_app = MCPAuthMiddleware(_mcp.sse_app())
     app.mount("/mcp", _mcp_app)
@@ -294,7 +299,9 @@ def create_app() -> FastAPI:
             )
 
     # Atlas landing page — atlas.alpheric.ai/
-    _landing_page = _pathlib.Path(__file__).parent.parent.parent / "public" / "landing" / "index.html"
+    _landing_page = (
+        _pathlib.Path(__file__).parent.parent.parent / "public" / "landing" / "index.html"
+    )
     if _landing_page.exists():
         from fastapi.responses import HTMLResponse as _HTMLResponse
 

@@ -67,7 +67,11 @@ class LiteLLMProvider(LLMProvider):
         self._api_base = api_base
         # Allow explicit prefix override (e.g. "gemini/" instead of "vertex_ai/"
         # when using a Google AI Studio API key rather than GCP service account)
-        self._prefix = prefix_override if prefix_override is not None else PROVIDER_PREFIX_MAP.get(name, "")
+        self._prefix = (
+            prefix_override
+            if prefix_override is not None
+            else PROVIDER_PREFIX_MAP.get(name, "")
+        )
         self._last_account_id = None  # track which key pool account was used
         self._last_account_name = None
 

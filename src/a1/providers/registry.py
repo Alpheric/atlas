@@ -215,11 +215,17 @@ class ProviderRegistry:
             if settings.vertex_auth_type == "api_key" and settings.vertex_api_key:
                 prefix = "gemini/"
                 api_key = settings.vertex_api_key
-                log.info(f"Registering Vertex/Gemini via LiteLLM (gemini/ prefix, API key auth, {len(models)} models)")
+                log.info(
+                    f"Registering Vertex/Gemini via LiteLLM "
+                    f"(gemini/ prefix, API key auth, {len(models)} models)"
+                )
             else:
                 prefix = "vertex_ai/"
                 api_key = None
-                log.info(f"Registering Vertex via LiteLLM (vertex_ai/ prefix, GCP auth, {len(models)} models)")
+                log.info(
+                    f"Registering Vertex via LiteLLM "
+                    f"(vertex_ai/ prefix, GCP auth, {len(models)} models)"
+                )
             self._providers["vertex"] = LiteLLMProvider(
                 name="vertex",
                 models=models,
