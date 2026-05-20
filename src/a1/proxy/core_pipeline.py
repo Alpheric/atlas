@@ -1307,10 +1307,14 @@ class CorePipeline:
             # like VeoProvider (video) / image providers are registered too,
             # and picking one here previously crashed with
             # "'VeoProvider' object has no attribute 'complete'".
+            from a1.providers.circuit_breaker import circuit_breaker
+
             provider = None
             for name, p in provider_registry.healthy_providers.items():
                 if not hasattr(p, "complete"):
                     continue  # skip video/image/non-chat providers
+                if not circuit_breaker.is_available(name):
+                    continue  # breaker open — skip this provider
                 models = p.list_models()
                 if not models:
                     continue
@@ -1403,8 +1407,17 @@ class CorePipeline:
                     model_name,
                 )
 
+            # Circuit breaker: this provider succeeded → close/reset its breaker.
+            from a1.providers.circuit_breaker import circuit_breaker
+
+            circuit_breaker.record_success(provider_name)
+
         except Exception as e:
             log.error(f"[pipeline] Provider {provider_name}/{model_name} error: {e}")
+            # Circuit breaker: record the failure (may open the breaker).
+            from a1.providers.circuit_breaker import circuit_breaker
+
+            circuit_breaker.record_failure(provider_name)
             # Attempt OpenAI cascade before declaring failure.
             # Only for non-streaming non-tool requests (streaming errors surface
             # to the client during iteration; tool requests are handled above).

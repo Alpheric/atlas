@@ -138,6 +138,14 @@ class Settings(BaseSettings):
     distillation_eval_gate_enabled: bool = False
     distillation_eval_gate_min_score: float = 0.6
     distillation_eval_gate_dataset: str = ""  # explicit dataset name; else match by task_type
+
+    # Provider failover circuit breaker (Phase 3.3). After N consecutive
+    # failures a provider's breaker opens (it's skipped) for a cooldown, then
+    # half-opens to probe recovery. Prevents hammering a down provider and
+    # speeds failover to healthy ones.
+    circuit_breaker_enabled: bool = True
+    circuit_breaker_threshold: int = 5            # consecutive failures to open
+    circuit_breaker_cooldown_seconds: int = 60    # open duration before half-open probe
     # After this many requests of the same task_type in the current server process,
     # route to local model directly (if healthy) without waiting for full training.
     # Set to 0 to disable. Default: 10 — enough to warm up Ollama without training.

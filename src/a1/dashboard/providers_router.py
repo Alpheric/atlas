@@ -85,6 +85,14 @@ async def refresh_providers():
     return {"status": "refreshed", "providers": provider_registry.list_providers()}
 
 
+@router.get("/providers/circuit")
+async def provider_circuit_state():
+    """Circuit breaker state per provider (Phase 3.3)."""
+    from a1.providers.circuit_breaker import circuit_breaker
+
+    return {"data": circuit_breaker.status()}
+
+
 # --- Provider Accounts (multi-key management) ---
 @router.get("/accounts")
 async def list_accounts(db: AsyncSession = Depends(get_db)):
