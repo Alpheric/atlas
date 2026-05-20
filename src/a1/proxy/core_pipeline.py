@@ -18,7 +18,7 @@ from fastapi import Response
 
 from a1.common.logging import get_logger
 from a1.common.metrics import metrics
-from a1.common.telemetry import record_otel_request
+from a1.common.telemetry import record_otel_request, set_attrs, span
 from a1.providers.registry import provider_registry
 from a1.proxy.pipeline import (
     LEGACY_ALIASES,
@@ -452,7 +452,21 @@ class CorePipeline:
                 result.pii_masked = bool(mask_map)
 
             # Step 4: Classify task + resolve Atlas model (smart_router)
-            task_type, confidence, atlas_model = await self._classify_and_resolve(inp)
+            with span(
+                "pipeline.classify",
+                source=inp.source,
+                stream=inp.stream,
+                has_tools=bool(inp.tools),
+                conversation_id=inp.conversation_id,
+                session_id=inp.session_id,
+            ) as _sp:
+                task_type, confidence, atlas_model = await self._classify_and_resolve(inp)
+                set_attrs(
+                    _sp,
+                    task_type=task_type,
+                    confidence=confidence,
+                    atlas_model=atlas_model,
+                )
             result.task_type = task_type
             result.confidence = confidence
             result.atlas_model = atlas_model
@@ -550,7 +564,24 @@ class CorePipeline:
                 _task_repeat_counts[task_type] = _task_repeat_counts.get(task_type, 0) + 1
 
             # Step 6: Route and execute
-            await self._route_and_execute(inp, result, response, task_type, confidence, atlas_model)
+            with span(
+                "pipeline.route_execute",
+                atlas_model=atlas_model,
+                task_type=task_type,
+                stream=inp.stream,
+                has_tools=bool(inp.tools),
+            ) as _sp:
+                await self._route_and_execute(
+                    inp, result, response, task_type, confidence, atlas_model
+                )
+                set_attrs(
+                    _sp,
+                    provider=result.provider_name,
+                    model=result.model_name,
+                    is_local=result.is_local,
+                    distillation=result.distillation,
+                    fast_path=result.fast_path,
+                )
 
             # Step 7: PII unmask
             if mask_map and result.assistant_text:

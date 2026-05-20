@@ -1,7 +1,15 @@
 """OpenTelemetry instrumentation for traces and metrics.
 
-Completely no-op when settings.otlp_endpoint is empty.
+No-op unless either:
+  - settings.otlp_endpoint is set (generic OTLP/gRPC collector), or
+  - settings.langfuse_enabled with public/secret keys (OTLP/HTTP → Langfuse).
+
+Provides safe span helpers (`span()`, `set_attrs()`) that degrade to no-ops
+when tracing is disabled, so call sites never need to guard.
 """
+
+import base64
+from contextlib import contextmanager
 
 from a1.common.logging import get_logger
 
@@ -30,15 +38,19 @@ def setup_telemetry(app, settings) -> None:
         error_counter, \
         _initialized
 
-    if not settings.otlp_endpoint or _initialized:
-        log.info("OpenTelemetry disabled (no otlp_endpoint configured)")
+    langfuse_on = bool(
+        settings.langfuse_enabled
+        and settings.langfuse_public_key
+        and settings.langfuse_secret_key
+    )
+
+    if (not settings.otlp_endpoint and not langfuse_on) or _initialized:
+        log.info("OpenTelemetry disabled (no otlp_endpoint and Langfuse not configured)")
         return
 
     try:
         from opentelemetry import metrics as otel_metrics
         from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.sdk.metrics import MeterProvider
         from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
@@ -48,13 +60,40 @@ def setup_telemetry(app, settings) -> None:
 
         resource = Resource.create(
             {
-                "service.name": "a1-trainer",
+                "service.name": "atlas",
                 "service.version": "0.1.0",
             }
         )
 
-        # Traces
         tracer_provider = TracerProvider(resource=resource)
+
+        if langfuse_on:
+            # Langfuse ingests OTLP/HTTP at {host}/api/public/otel with
+            # HTTP Basic auth: base64(public_key:secret_key).
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                OTLPSpanExporter as HTTPSpanExporter,
+            )
+
+            host = settings.langfuse_host.rstrip("/")
+            creds = f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}"
+            auth = base64.b64encode(creds.encode()).decode()
+            span_exporter = HTTPSpanExporter(
+                endpoint=f"{host}/api/public/otel/v1/traces",
+                headers={"Authorization": f"Basic {auth}"},
+            )
+            tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+            trace.set_tracer_provider(tracer_provider)
+            tracer = trace.get_tracer("a1.proxy")
+            FastAPIInstrumentor.instrument_app(app)
+            _instrument_libraries()
+            _initialized = True
+            log.info(f"OpenTelemetry → Langfuse initialized ({host})")
+            return
+
+        # Generic OTLP/gRPC path (Tempo, Jaeger, Datadog collector, etc.)
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+
         tracer_provider.add_span_processor(
             BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otlp_endpoint))
         )
@@ -84,6 +123,7 @@ def setup_telemetry(app, settings) -> None:
 
         # Auto-instrument FastAPI
         FastAPIInstrumentor.instrument_app(app)
+        _instrument_libraries()
 
         _initialized = True
         log.info(f"OpenTelemetry initialized, exporting to {settings.otlp_endpoint}")
@@ -92,6 +132,59 @@ def setup_telemetry(app, settings) -> None:
         log.warning(f"OpenTelemetry packages not available: {e}")
     except Exception as e:
         log.error(f"Failed to initialize OpenTelemetry: {e}")
+
+
+def _instrument_libraries() -> None:
+    """Best-effort auto-instrumentation of SQLAlchemy + httpx for free DB and
+    outbound-call spans nested inside each request trace. Silently skips any
+    library whose instrumentation package isn't installed."""
+    try:
+        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+        SQLAlchemyInstrumentor().instrument()
+    except Exception as e:
+        log.debug(f"SQLAlchemy instrumentation skipped: {e}")
+    try:
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+        HTTPXClientInstrumentor().instrument()
+    except Exception as e:
+        log.debug(f"httpx instrumentation skipped: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Safe span helpers — no-ops when tracing is disabled, so call sites are clean.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@contextmanager
+def span(name: str, **attrs):
+    """Start a child span. Yields the span (or None when tracing is disabled).
+
+    Usage:
+        with span("pipeline.route", atlas_model=m, task_type=t) as sp:
+            ...
+            set_attrs(sp, provider=p, is_local=False)
+    """
+    if tracer is None:
+        yield None
+        return
+    clean = {k: v for k, v in attrs.items() if v is not None}
+    with tracer.start_as_current_span(name, attributes=clean) as sp:
+        yield sp
+
+
+def set_attrs(sp, **attrs) -> None:
+    """Set attributes on a span; no-op if span is None or tracing disabled."""
+    if sp is None or not hasattr(sp, "set_attribute"):
+        return
+    for k, v in attrs.items():
+        if v is None:
+            continue
+        try:
+            sp.set_attribute(k, v)
+        except Exception:
+            pass
 
 
 def record_otel_request(

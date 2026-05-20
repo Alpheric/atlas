@@ -91,7 +91,14 @@ class Settings(BaseSettings):
     cache_db_path: str = "./cache/gptcache.db"
 
     # OpenTelemetry
-    otlp_endpoint: str = ""
+    otlp_endpoint: str = ""  # generic OTLP/gRPC collector (Tempo, Jaeger, etc.)
+
+    # Langfuse (LLM observability) — ingests OTLP/HTTP natively.
+    # When enabled with keys, traces export to Langfuse regardless of otlp_endpoint.
+    langfuse_enabled: bool = False                       # A1_LANGFUSE_ENABLED
+    langfuse_host: str = "https://cloud.langfuse.com"    # A1_LANGFUSE_HOST (self-host: http://localhost:3000)
+    langfuse_public_key: str = ""                        # A1_LANGFUSE_PUBLIC_KEY (pk-lf-...)
+    langfuse_secret_key: str = ""                        # A1_LANGFUSE_SECRET_KEY (sk-lf-...)
 
     # Argilla
     argilla_api_url: str = ""
