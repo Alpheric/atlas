@@ -130,6 +130,14 @@ class Settings(BaseSettings):
     distillation_quality_threshold: float = 0.7
     distillation_handoff_increment: float = 0.1
     distillation_max_handoff_pct: float = 0.9
+    # Distillation eval-set quality gate (Phase 3.1). Before increasing a task
+    # type's local handoff %, replay an eval dataset through the new local model
+    # and require avg LLM-judge score >= the min. Blocks regressions from
+    # graduating. If no eval dataset exists for the task, the gate is skipped
+    # (won't block training on missing eval data).
+    distillation_eval_gate_enabled: bool = False
+    distillation_eval_gate_min_score: float = 0.6
+    distillation_eval_gate_dataset: str = ""  # explicit dataset name; else match by task_type
     # After this many requests of the same task_type in the current server process,
     # route to local model directly (if healthy) without waiting for full training.
     # Set to 0 to disable. Default: 10 — enough to warm up Ollama without training.

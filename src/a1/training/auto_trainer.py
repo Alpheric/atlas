@@ -968,7 +968,35 @@ async def update_handoff_after_training(task_type: str, eval_results: dict):
                         _handoff_cache[task_type] = readiness.local_handoff_pct  # unchanged
                         return
 
-                    # Gate disabled — apply increment directly
+                    # --- Eval-set quality gate (Phase 3.1) ---
+                    # Block the handoff increase if the new local model fails an
+                    # eval-set replay, even when training loss "improved".
+                    if settings.distillation_eval_gate_enabled:
+                        from a1.eval.gate import run_eval_gate
+
+                        local_model = (
+                            getattr(readiness, "local_model", None)
+                            or eval_results.get("ollama_model")
+                            or eval_results.get("local_model")
+                        )
+                        if local_model:
+                            gate = await run_eval_gate(
+                                task_type,
+                                local_model,
+                                settings.distillation_eval_gate_min_score,
+                            )
+                            if not gate["passed"]:
+                                readiness.argilla_review_status = "eval_gate_failed"
+                                log.warning(
+                                    f"Handoff for {task_type} BLOCKED by eval gate: "
+                                    f"avg_judge={gate['avg_judge']} "
+                                    f"avg_heuristic={gate['avg_heuristic']} "
+                                    f"min={settings.distillation_eval_gate_min_score} "
+                                    f"dataset={gate['dataset']}"
+                                )
+                                return
+
+                    # Gate disabled (or passed) — apply increment directly
                     cap = (
                         getattr(readiness, "max_local_pct", None)
                         or settings.distillation_max_handoff_pct
