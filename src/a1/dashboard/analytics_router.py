@@ -676,3 +676,27 @@ async def list_anomalies(limit: int = Query(50, ge=1, le=200)):
 
     data = state.recent(limit)
     return {"enabled": True, "data": data, "total": len(data)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Routing replay / shadow eval (Phase 3.2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/routing/replay")
+async def routing_replay(body: dict):
+    """Project the cost of a candidate routing policy over historical traffic.
+
+    Body: {"candidate": {"<task_type>"|"*": "<model>"}, "days": 7, "limit": 5000}
+    Returns actual vs projected cost, routes changed, local shift, per-task diff.
+    """
+    from a1.routing.replay import replay_routing
+
+    candidate = body.get("candidate") or {}
+    if not isinstance(candidate, dict) or not candidate:
+        from fastapi import HTTPException
+
+        raise HTTPException(400, 'Provide "candidate" map, e.g. {"*": "gemini-2.5-flash"}')
+    days = int(body.get("days", 7))
+    limit = int(body.get("limit", 5000))
+    return await replay_routing(candidate, days=days, limit=limit)
