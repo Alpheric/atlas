@@ -5,6 +5,7 @@ Discovers and routes to models across multiple Ollama servers
 """
 
 import json
+import re
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -26,6 +27,17 @@ from a1.proxy.response_models import (
 from config.settings import settings
 
 log = get_logger("providers.ollama")
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_think(text: str) -> str:
+    """Remove inline <think>...</think> reasoning blocks (some reasoning models
+    emit them inside `content` rather than the separate `thinking` field).
+    Returns the visible answer, stripped. Empty string if nothing remains."""
+    if not text or "<think>" not in text.lower():
+        return text.strip() if text else ""
+    return _THINK_RE.sub("", text).strip()
 
 
 @dataclass
@@ -247,13 +259,24 @@ class OllamaProvider(LLMProvider):
         # don't get cut off mid-think.
         thinking = self._is_thinking_model(model)
         min_tokens = 4096 if thinking else 512
+
+        # Context window. Reasoning models (deepseek-r1, qwq) are capped to a
+        # smaller window: their full trained ctx (e.g. 131072) allocates a huge
+        # KV cache that thrashes VRAM on shared GPUs, making generation crawl or
+        # time out entirely. Verified: deepseek-r1:8b times out at num_ctx=131072
+        # but answers in ~48s at num_ctx=8192. 16384 keeps headroom for the
+        # <think> phase while staying memory-cheap.
+        num_ctx = self._ctx_for_model(model)
+        if thinking:
+            num_ctx = min(num_ctx, 16384)
+
         opts: dict = {
             # Keep model loaded indefinitely — eliminates cold-start reload delay.
             "keep_alive": -1,
             # Limit output to what was requested so Ollama doesn't over-generate.
             "num_predict": max(request.max_tokens or 2048, min_tokens),
             # Explicitly set context window — Ollama defaults to 2048 without this.
-            "num_ctx": self._ctx_for_model(model),
+            "num_ctx": num_ctx,
         }
         if request.temperature is not None:
             opts["temperature"] = request.temperature
@@ -298,7 +321,7 @@ class OllamaProvider(LLMProvider):
         msg = data.get("message", {})
         # Thinking models (deepseek-r1, qwq) emit reasoning in a separate `thinking`
         # field and may leave `content` empty.  Fall back so callers always get text.
-        content = msg.get("content") or msg.get("thinking") or ""
+        content = _strip_think(msg.get("content") or "") or msg.get("thinking") or ""
 
         # Convert Ollama tool_calls to OpenAI format
         # Ollama: [{"function": {"name": "...", "arguments": {...}}}]
