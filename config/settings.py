@@ -193,6 +193,13 @@ class Settings(BaseSettings):
     self_critique_enabled: bool = True
     quality_min_score: float = 0.40           # below this → trigger self-critique
     quality_critique_model: str = "claude-haiku-4-5"  # fast, cheap critique model
+
+    # LLM-as-judge (Phase 2.4) — richer quality signal alongside the heuristic.
+    # Off by default (adds an extra inference). Runs fire-and-forget off the
+    # request path; sampled by quality_llm_judge_sample_rate (0..1).
+    quality_llm_judge_enabled: bool = False
+    quality_llm_judge_sample_rate: float = 1.0
+    quality_llm_judge_model: str = "claude-haiku-4-5"  # cheap/fast judge
     feedback_regen_enabled: bool = True       # thumbs-down triggers regeneration
     health_monitor_interval_seconds: int = 300  # how often to scan conversations (seconds)
 

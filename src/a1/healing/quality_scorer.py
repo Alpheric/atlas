@@ -145,4 +145,13 @@ async def score_and_store(
     except Exception as exc:
         log.debug(f"[quality-scorer] DB write skipped: {exc}")
 
+    # Layer 1b: optional LLM-as-judge (Phase 2.4). No-op unless enabled; runs
+    # within this already-background task so it never touches the request path.
+    try:
+        from a1.healing.llm_judge import judge_and_store
+
+        await judge_and_store(response_text, task_type, message_id)
+    except Exception as exc:
+        log.debug(f"[quality-scorer] llm-judge skipped: {exc}")
+
     return score
