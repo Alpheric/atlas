@@ -1265,19 +1265,30 @@ class CorePipeline:
             provider_name = p.name if p else "unknown"
 
         provider = provider_registry.get_provider(provider_name)
-        if not provider:
-            # Fallback: any healthy provider
+        if not provider or not hasattr(provider, "complete"):
+            # Fallback: first healthy provider that can actually do chat
+            # completion. Must guard on hasattr(complete) — non-chat providers
+            # like VeoProvider (video) / image providers are registered too,
+            # and picking one here previously crashed with
+            # "'VeoProvider' object has no attribute 'complete'".
+            provider = None
             for name, p in provider_registry.healthy_providers.items():
-                provider = p
+                if not hasattr(p, "complete"):
+                    continue  # skip video/image/non-chat providers
                 models = p.list_models()
-                if models:
-                    model_name = models[0].name
-                    provider_name = name
+                if not models:
+                    continue
+                provider = p
+                model_name = models[0].name
+                provider_name = name
                 break
 
         if not provider:
-            result.error = f"No provider available for model: {model}"
-            result.error_type = "provider_error"
+            result.error = (
+                f"No chat provider available for model: {model}. "
+                "The model may be unknown or retired."
+            )
+            result.error_type = "model_not_found"
             return
 
         req = ChatCompletionRequest(

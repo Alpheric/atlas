@@ -115,7 +115,21 @@ providers:
         max_output_tokens: 65536
         tier: fast
         latency_class: normal
-      - name: gemini-2.5-flash-preview-04-17
+      # NOTE: gemini-2.0-*, gemini-1.5-*, and gemini-2.5-flash-preview-04-17
+      # were removed 2026-05 — Google retired them ("no longer available to
+      # new users" / 404 NOT_FOUND). Verified live against the API. Below are
+      # the current models available for this API key.
+      - name: gemini-2.5-flash-lite
+        context_window: 1000000
+        cost_per_1k_input: 0.0000001
+        cost_per_1k_output: 0.0000004
+        supports_tools: true
+        supports_streaming: true
+        supports_vision: true
+        max_output_tokens: 65536
+        tier: fast
+        latency_class: realtime
+      - name: gemini-flash-latest
         context_window: 1000000
         cost_per_1k_input: 0.000015
         cost_per_1k_output: 0.0000035
@@ -125,44 +139,34 @@ providers:
         max_output_tokens: 65536
         tier: fast
         latency_class: normal
-      - name: gemini-2.0-flash
+      - name: gemini-pro-latest
         context_window: 1000000
-        cost_per_1k_input: 0.0000001
-        cost_per_1k_output: 0.0000004
-        supports_tools: true
-        supports_streaming: true
-        supports_vision: true
-        max_output_tokens: 8192
-        tier: fast
-        latency_class: realtime
-      - name: gemini-2.0-flash-lite
-        context_window: 1000000
-        cost_per_1k_input: 0.000000075
-        cost_per_1k_output: 0.0000003
-        supports_tools: false
-        supports_streaming: true
-        supports_vision: true
-        max_output_tokens: 8192
-        tier: fast
-        latency_class: realtime
-      - name: gemini-1.5-pro
-        context_window: 2000000
         cost_per_1k_input: 0.00125
-        cost_per_1k_output: 0.005
+        cost_per_1k_output: 0.01
         supports_tools: true
         supports_streaming: true
         supports_vision: true
-        max_output_tokens: 8192
+        max_output_tokens: 65536
         tier: frontier
         latency_class: normal
-      - name: gemini-1.5-flash
-        context_window: 1000000
-        cost_per_1k_input: 0.000075
-        cost_per_1k_output: 0.0003
-        supports_tools: true
-        supports_streaming: true
-        supports_vision: true
-        max_output_tokens: 8192
+
+  # --- Gemini image generation (Nano Banana / Nano Banana Pro) ---
+  # Shares VertexProvider auth (A1_VERTEX_API_KEY or A1_VERTEX_PROJECT_ID).
+  gemini_image:
+    enabled: true
+    models:
+      - name: gemini-3-pro-image-preview
+        description: "Nano Banana Pro — Google's flagship image model (gemini-3-pro-image-preview)"
+        max_images_per_request: 4
+        cost_per_image: 0.039
+        supported_aspect_ratios: ["1:1", "16:9", "9:16", "4:3", "3:4"]
+        tier: frontier
+        latency_class: batch
+      - name: gemini-2.5-flash-image
+        description: "Nano Banana — fast, low-cost image generation"
+        max_images_per_request: 4
+        cost_per_image: 0.0039
+        supported_aspect_ratios: ["1:1", "16:9", "9:16", "4:3", "3:4"]
         tier: fast
         latency_class: normal
 

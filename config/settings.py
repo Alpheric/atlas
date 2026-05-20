@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # Vertex AI / Gemini extended config
     vertex_api_key: str = ""                           # A1_VERTEX_API_KEY (Google AI Studio key)
     vertex_auth_type: str = "api_key"                  # "api_key" | "service_account"
-    vertex_default_model: str = "gemini-2.0-flash"     # A1_VERTEX_DEFAULT_MODEL
+    vertex_default_model: str = "gemini-2.5-flash"     # A1_VERTEX_DEFAULT_MODEL (gemini-2.0-flash retired by Google)
     vertex_web_search_enabled: bool = False            # A1_VERTEX_WEB_SEARCH_ENABLED
     vertex_timeout: float = 60.0                       # A1_VERTEX_TIMEOUT
     # Tenant sources (atlas_api_keys.source values) whose requests are forced
