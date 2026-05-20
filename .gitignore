@@ -27,8 +27,8 @@ cache/
 *.db
 *.sqlite3
 
-alembic/versions/*.py
-!alembic/versions/__init__.py
+# Migrations MUST be version-controlled — a schema change is useless if the
+# migration to apply it isn't committed. (Was: alembic/versions/*.py ignored.)
 
 .vite/
 .claude/settings.local.json
