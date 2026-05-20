@@ -45,13 +45,25 @@ async def self_critique(
     Returns the improved response text, or ``None`` if the critique failed
     or produced output that is not meaningfully longer/better than the original.
     """
+    from a1.common.prompt_registry import get_prompt
     from a1.proxy.request_models import ChatCompletionRequest
 
-    prompt = _CRITIQUE_PROMPT.format(
-        user_message=user_message[:2000],
-        original_response=original_response[:3000],
-        task_type=task_type,
-    )
+    # Load the (possibly DB-overridden) critique template; falls back to the
+    # hardcoded _CRITIQUE_PROMPT when no active version exists in the registry.
+    template = await get_prompt("self_critique", default=_CRITIQUE_PROMPT)
+    try:
+        prompt = template.format(
+            user_message=user_message[:2000],
+            original_response=original_response[:3000],
+            task_type=task_type,
+        )
+    except (KeyError, IndexError):
+        # A bad DB template (wrong/missing placeholders) must not break healing.
+        prompt = _CRITIQUE_PROMPT.format(
+            user_message=user_message[:2000],
+            original_response=original_response[:3000],
+            task_type=task_type,
+        )
 
     try:
         req = ChatCompletionRequest(

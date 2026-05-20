@@ -217,6 +217,7 @@ class ApiKey(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    key_prefix: Mapped[str | None] = mapped_column(String(64), nullable=True)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True
@@ -1286,3 +1287,41 @@ class Batch(Base):
 Index("ix_batches_status", Batch.status)
 Index("ix_batches_created", Batch.created_at)
 Index("ix_batches_workspace", Batch.workspace_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompt versioning (Phase 2.1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class PromptVersion(Base):
+    """A versioned, named prompt template.
+
+    Lets prompts (system-prompt suffixes, the self-critique template, etc.) live
+    in the DB instead of hardcoded in source / static YAML, so they can be
+    edited and A/B-tested without a redeploy. The loader falls back to code
+    defaults when no active version exists, so behavior is preserved.
+    """
+
+    __tablename__ = "prompt_versions"
+    __table_args__ = (
+        UniqueConstraint("name", "version", name="uq_prompt_name_version"),
+        Index("ix_prompt_name_active", "name", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)  # logical key, e.g. "self_critique"
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Optional model scoping (e.g. an atlas-code-specific suffix). NULL = global.
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now_ist, onupdate=_now_ist
+    )
+
+
+Index("ix_prompt_versions_name", PromptVersion.name)
