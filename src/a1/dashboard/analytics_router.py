@@ -14,6 +14,8 @@ Endpoints:
   POST /models/compare
   GET  /routing/decisions
   GET  /routing/performance
+  GET  /analytics/cost-by-workspace
+  GET  /analytics/cost-by-key
 """
 
 from datetime import datetime, timedelta, timezone
@@ -479,4 +481,175 @@ async def search_citations(
             for c in citations
         ],
         "total": len(citations),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cost attribution (Phase 2.2) — per-workspace and per-key spend + budget burn
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/analytics/cost-by-workspace")
+async def cost_by_workspace(
+    days: int = Query(30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-workspace spend over the window, with monthly budget burn-down.
+
+    Joins UsageRecord → Workspace (name) and WorkspaceBudget (limit / current
+    month spend). Rows with no workspace_id are grouped under "(unattributed)".
+    """
+    from a1.db.models import UsageRecord, Workspace, WorkspaceBudget
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    rows = (
+        await db.execute(
+            select(
+                UsageRecord.workspace_id,
+                func.count().label("requests"),
+                func.coalesce(func.sum(UsageRecord.prompt_tokens), 0).label("prompt_tokens"),
+                func.coalesce(func.sum(UsageRecord.completion_tokens), 0).label("completion_tokens"),
+                func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("cost_usd"),
+                func.coalesce(
+                    func.sum(UsageRecord.equivalent_external_cost_usd), 0
+                ).label("equivalent_external_cost_usd"),
+                func.coalesce(
+                    func.sum(case((UsageRecord.error.is_(True), 1), else_=0)), 0
+                ).label("errors"),
+            )
+            .where(UsageRecord.created_at >= since)
+            .group_by(UsageRecord.workspace_id)
+        )
+    ).all()
+
+    # Resolve workspace names + budgets
+    names: dict[str, str] = {}
+    ws_result = await db.execute(select(Workspace.id, Workspace.name))
+    for wid, wname in ws_result.all():
+        names[str(wid)] = wname
+
+    budgets: dict[str, dict] = {}
+    bud_result = await db.execute(
+        select(
+            WorkspaceBudget.workspace_id,
+            WorkspaceBudget.monthly_limit_usd,
+            WorkspaceBudget.current_month_usd,
+            WorkspaceBudget.alert_threshold_pct,
+            WorkspaceBudget.budget_month,
+        )
+    )
+    for wid, limit, cur, thr, month in bud_result.all():
+        budgets[str(wid)] = {
+            "monthly_limit_usd": float(limit or 0),
+            "current_month_usd": float(cur or 0),
+            "alert_threshold_pct": float(thr or 0.8),
+            "budget_month": month,
+            "pct_used": round(float(cur or 0) / float(limit), 4) if limit else None,
+        }
+
+    data = []
+    for r in rows:
+        wid = str(r.workspace_id) if r.workspace_id else None
+        data.append(
+            {
+                "workspace_id": wid,
+                "workspace_name": names.get(wid, "(unattributed)") if wid else "(unattributed)",
+                "requests": int(r.requests),
+                "prompt_tokens": int(r.prompt_tokens),
+                "completion_tokens": int(r.completion_tokens),
+                "total_tokens": int(r.prompt_tokens) + int(r.completion_tokens),
+                "cost_usd": round(float(r.cost_usd), 6),
+                "savings_usd": round(float(r.equivalent_external_cost_usd), 6),
+                "errors": int(r.errors),
+                "budget": budgets.get(wid) if wid else None,
+            }
+        )
+
+    data.sort(key=lambda d: d["cost_usd"], reverse=True)
+    return {
+        "window_days": days,
+        "data": data,
+        "total_cost_usd": round(sum(d["cost_usd"] for d in data), 6),
+    }
+
+
+@router.get("/analytics/cost-by-key")
+async def cost_by_key(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-API-key spend over the window. Labels keys via ApiKey.name when
+    available, else AtlasApiKey tenant info, else the truncated hash."""
+    from a1.db.models import ApiKey, AtlasApiKey, UsageRecord
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    rows = (
+        await db.execute(
+            select(
+                UsageRecord.api_key_hash,
+                func.count().label("requests"),
+                func.coalesce(func.sum(UsageRecord.prompt_tokens), 0).label("prompt_tokens"),
+                func.coalesce(func.sum(UsageRecord.completion_tokens), 0).label("completion_tokens"),
+                func.coalesce(func.sum(UsageRecord.cost_usd), 0).label("cost_usd"),
+                func.coalesce(
+                    func.sum(case((UsageRecord.error.is_(True), 1), else_=0)), 0
+                ).label("errors"),
+            )
+            .where(UsageRecord.created_at >= since)
+            .group_by(UsageRecord.api_key_hash)
+            .order_by(func.sum(UsageRecord.cost_usd).desc())
+            .limit(limit)
+        )
+    ).all()
+
+    hashes = [r.api_key_hash for r in rows if r.api_key_hash]
+
+    # Build label maps
+    dash_names: dict[str, str] = {}
+    if hashes:
+        dr = await db.execute(
+            select(ApiKey.key_hash, ApiKey.name).where(ApiKey.key_hash.in_(hashes))
+        )
+        for kh, nm in dr.all():
+            if nm:
+                dash_names[kh] = nm
+
+    tenant_names: dict[str, str] = {}
+    if hashes:
+        tr = await db.execute(
+            select(AtlasApiKey.key_hash, AtlasApiKey.tenant_name, AtlasApiKey.source).where(
+                AtlasApiKey.key_hash.in_(hashes)
+            )
+        )
+        for kh, tn, src in tr.all():
+            tenant_names[kh] = tn or f"({src})"
+
+    data = []
+    for r in rows:
+        kh = r.api_key_hash
+        label = (
+            dash_names.get(kh)
+            or tenant_names.get(kh)
+            or (f"{kh[:12]}…" if kh else "(no key)")
+        )
+        data.append(
+            {
+                "api_key_hash": kh,
+                "label": label,
+                "requests": int(r.requests),
+                "prompt_tokens": int(r.prompt_tokens),
+                "completion_tokens": int(r.completion_tokens),
+                "total_tokens": int(r.prompt_tokens) + int(r.completion_tokens),
+                "cost_usd": round(float(r.cost_usd), 6),
+                "errors": int(r.errors),
+            }
+        )
+
+    return {
+        "window_days": days,
+        "data": data,
+        "total_cost_usd": round(sum(d["cost_usd"] for d in data), 6),
     }

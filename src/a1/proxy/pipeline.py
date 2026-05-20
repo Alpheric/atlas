@@ -202,16 +202,42 @@ async def _persist_usage(
     account_id=None,
     cache_hit: bool = False,
     error: bool = False,
+    workspace_id: str | None = None,
 ):
-    """Persist usage record to DB (fire-and-forget background task)."""
+    """Persist usage record to DB (fire-and-forget background task).
+
+    workspace_id enables per-workspace cost attribution. When not supplied
+    explicitly it is resolved from api_key_hash (cached lookup), so usage is
+    attributed even on entry points that don't pre-resolve the workspace.
+    """
     try:
+        import uuid as _uuid
+
         from a1.db.engine import async_session
         from a1.db.models import UsageRecord
+
+        # Resolve workspace from the key if not given.
+        if workspace_id is None and api_key_hash:
+            try:
+                from a1.common.auth import _resolve_key_info
+
+                ws, _role, _rl = await _resolve_key_info(api_key_hash)
+                workspace_id = ws
+            except Exception:
+                workspace_id = None
+
+        ws_uuid = None
+        if workspace_id:
+            try:
+                ws_uuid = _uuid.UUID(workspace_id)
+            except (ValueError, TypeError):
+                ws_uuid = None
 
         async with async_session() as session:
             async with session.begin():
                 record = UsageRecord(
                     api_key_hash=api_key_hash,
+                    workspace_id=ws_uuid,
                     account_id=account_id,
                     provider=provider_name,
                     model=model_name,

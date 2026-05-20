@@ -1561,6 +1561,9 @@ class CorePipeline:
                 result.cost_usd,
                 result.latency_ms,
                 inp.api_key_hash,
+                cache_hit=result.cache_hit,
+                error=bool(result.error),
+                workspace_id=inp.workspace_id,
             )
         )
 
