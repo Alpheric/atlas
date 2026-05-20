@@ -203,6 +203,18 @@ class Settings(BaseSettings):
     feedback_regen_enabled: bool = True       # thumbs-down triggers regeneration
     health_monitor_interval_seconds: int = 300  # how often to scan conversations (seconds)
 
+    # Anomaly detection + alerting (Phase 2.5). In-process background monitor
+    # that compares each interval against a rolling EWMA baseline and flags
+    # error-rate spikes, latency p99 spikes, cost surges, and provider health
+    # flaps. Optional webhook for alerts (Slack-compatible JSON {"text": ...}).
+    anomaly_detection_enabled: bool = True
+    anomaly_check_interval_seconds: int = 120
+    anomaly_error_rate_threshold: float = 0.25   # >25% errors in an interval
+    anomaly_latency_factor: float = 2.5          # p99 > 2.5x baseline
+    anomaly_cost_factor: float = 3.0             # interval cost > 3x baseline
+    anomaly_min_requests: int = 20               # ignore tiny-sample intervals
+    alert_webhook_url: str = ""                  # optional; POSTed {"text": "..."}
+
     # Web Search
     web_search_enabled: bool = False          # master switch; opt-in
     web_search_intent_threshold: int = 50     # intent score 0-100 required to trigger search

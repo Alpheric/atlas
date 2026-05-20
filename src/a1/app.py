@@ -176,11 +176,24 @@ async def lifespan(app: FastAPI):
         f"(interval={settings.health_monitor_interval_seconds}s)"
     )
 
+    # Start anomaly detection monitor (Phase 2.5)
+    _anomaly_task = None
+    if settings.anomaly_detection_enabled:
+        from a1.monitoring.anomaly_detector import run_anomaly_monitor
+
+        _anomaly_task = asyncio.create_task(run_anomaly_monitor())
+        _startup_log.info(
+            f"Anomaly monitor started "
+            f"(interval={settings.anomaly_check_interval_seconds}s)"
+        )
+
     yield
 
     # Cleanup
     _health_task.cancel()
     _monitor_task.cancel()
+    if _anomaly_task:
+        _anomaly_task.cancel()
     from a1.dependencies import _arq_pool, _redis
 
     if _redis:

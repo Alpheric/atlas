@@ -657,3 +657,22 @@ async def cost_by_key(
         "data": data,
         "total_cost_usd": round(sum(d["cost_usd"] for d in data), 6),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Anomaly detection (Phase 2.5)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/analytics/anomalies")
+async def list_anomalies(limit: int = Query(50, ge=1, le=200)):
+    """Recent anomalies detected by the background monitor (newest first)."""
+    from config.settings import settings
+
+    if not settings.anomaly_detection_enabled:
+        return {"enabled": False, "data": [], "total": 0}
+
+    from a1.monitoring.anomaly_detector import state
+
+    data = state.recent(limit)
+    return {"enabled": True, "data": data, "total": len(data)}
