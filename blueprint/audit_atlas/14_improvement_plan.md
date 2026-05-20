@@ -1,5 +1,11 @@
 # Atlas Platform — Final Improvement Plan
 
+> STATUS 2026-05-12: ALL PHASES IMPLEMENTED. Phases 0,1,2,3 complete and pushed
+> (commits f6f61bb..c82e12c). Most new subsystems ship OFF by default behind
+> settings — see "Morning TODO" at the bottom for the flags to flip and the
+> manual decisions remaining.
+
+
 _Last updated: 2026-05-12_
 
 ## North Star
@@ -96,3 +102,48 @@ observable and debuggable.
   `dual_execution_records`, `task_type_readiness`, `training_runs`.
 - **Dashboard:** 15+ analytics endpoints; missing cost attribution by
   user/workspace and anomaly detection.
+
+
+---
+
+## Morning TODO (decisions + flags for the human)
+
+All code is committed + pushed to both remotes and verified on the running dev
+server. These are the things that need YOUR call:
+
+### Turn on (set in .env, then restart backend)
+- [ ] **Langfuse tracing** — bring up `docker compose --profile langfuse up -d`,
+      create a project at http://localhost:3000, then set
+      `A1_LANGFUSE_ENABLED=true` + `A1_LANGFUSE_HOST` + public/secret keys.
+- [ ] **LLM-as-judge** — `A1_QUALITY_LLM_JUDGE_ENABLED=true`
+      (consider `A1_QUALITY_LLM_JUDGE_SAMPLE_RATE=0.2` to control cost).
+- [ ] **Anomaly alerts webhook** — set `A1_ALERT_WEBHOOK_URL=<slack webhook>`
+      (detection is already on; this just adds notifications).
+- [ ] **Distillation eval gate** — `A1_DISTILLATION_EVAL_GATE_ENABLED=true`
+      AFTER you create an eval dataset per task type (see below). Until a
+      dataset exists the gate auto-skips, so enabling it now is harmless.
+
+### Already on, no action needed
+- Anomaly detection (in-process), circuit breaker, cost attribution,
+  prompt registry, lint CI, deepseek-r1 ctx cap.
+
+### Decisions to make
+- [ ] **Create eval datasets**: `POST /admin/eval/datasets/promote-from-distillation`
+      with `{"dataset_name":"code-eval","task_type":"code","min_quality":0.7}`
+      to seed from your distillation history, per task type you care about.
+- [ ] **Try a routing-cost projection**:
+      `POST /admin/routing/replay {"candidate":{"*":"qwen2.5-coder:7b"},"days":30}`
+      — last run projected $104.59 → $0 if all code traffic went local.
+      Decide if a partial shift is worth it.
+- [ ] **CI**: a lint-only workflow is in `.github/workflows/lint.yml`. Decide if
+      you want to re-add tests later (the old test job needed DB/env setup).
+- [ ] **format check**: `ruff format` would touch ~14 files; left out of CI for
+      now. Run it when you want a one-time formatting pass.
+
+### Known follow-ups (flagged, not blockers)
+- OneDesk tenant keys (AtlasApiKey) attribute to `cost-by-key` (by tenant) but
+  not `cost-by-workspace` (they use tenant_id, not a workspace UUID).
+- Atlas model system-prompt suffixes still live in providers.yaml; they can move
+  onto the new prompt registry when you want them versioned/A-B-able.
+- deepseek-r1 ctx capped to 16384 — verify it's fast enough on your GPUs under
+  real load (worked at ~17s warm in testing).
