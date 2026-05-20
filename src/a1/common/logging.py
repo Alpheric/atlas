@@ -23,6 +23,17 @@ class JSONFormatter(logging.Formatter):
                 log_entry["request_id"] = rid
         except Exception:
             pass
+        # Correlate logs with the active OTel trace (no-op when tracing is off).
+        # 32/16-hex-char IDs match what Langfuse/Tempo/Jaeger expect.
+        try:
+            from opentelemetry import trace as _otel_trace
+
+            ctx = _otel_trace.get_current_span().get_span_context()
+            if getattr(ctx, "is_valid", False):
+                log_entry["trace_id"] = format(ctx.trace_id, "032x")
+                log_entry["span_id"] = format(ctx.span_id, "016x")
+        except Exception:
+            pass
         if record.exc_info and record.exc_info[1]:
             log_entry["error"] = str(record.exc_info[1])
         return json.dumps(log_entry, default=str)
