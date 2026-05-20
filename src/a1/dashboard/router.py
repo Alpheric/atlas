@@ -21,6 +21,7 @@ from a1.dashboard.agents_router import router as agents
 from a1.dashboard.analytics_router import router as analytics
 from a1.dashboard.auth_router import router as auth
 from a1.dashboard.conversations_router import router as conversations
+from a1.dashboard.eval_router import router as eval_router
 from a1.dashboard.governance_router import router as governance
 from a1.dashboard.plans_router import router as plans
 from a1.dashboard.prompts_router import router as prompts
@@ -45,6 +46,7 @@ router.include_router(plans)
 router.include_router(governance)
 router.include_router(users)
 router.include_router(prompts)
+router.include_router(eval_router)
 
 # WebSocket route is registered separately (no router-level dep) because browsers
 # cannot send Authorization headers during a WebSocket upgrade. Auth is enforced

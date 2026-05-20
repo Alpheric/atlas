@@ -1326,3 +1326,66 @@ class PromptVersion(Base):
 
 
 Index("ix_prompt_versions_name", PromptVersion.name)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Evaluation datasets + experiment runs (Phase 2.3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class EvalDataset(Base):
+    """A named, versioned set of eval items (prompts + optional references)."""
+
+    __tablename__ = "eval_datasets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now_ist, onupdate=_now_ist
+    )
+
+
+class EvalItem(Base):
+    """A single eval case: input messages + optional reference output."""
+
+    __tablename__ = "eval_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    input_messages: Mapped[dict] = mapped_column(JSONB, nullable=False)  # OpenAI-style messages
+    reference_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)  # manual | distillation
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+
+
+Index("ix_eval_items_dataset", EvalItem.dataset_id)
+
+
+class EvalRun(Base):
+    """One execution of a dataset through a model, with aggregate scores."""
+
+    __tablename__ = "eval_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    item_count: Mapped[int] = mapped_column(Integer, default=0)
+    avg_heuristic: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_judge: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    results: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # per-item detail
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_ist)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+Index("ix_eval_runs_dataset", EvalRun.dataset_id)
