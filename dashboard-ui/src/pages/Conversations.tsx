@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   Typography, Table, Tag, Input, Space, Card, Row, Col, Statistic, Badge, Button,
   Tooltip, Segmented, Select, Progress,
@@ -23,8 +23,10 @@ dayjs.extend(relativeTime);
 const { Search } = Input;
 const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#06b6d4'];
 
-/** Coloured health score pill — matches ConversationDetail style */
-function HealthBadge({ score, flags }: { score: number | null | undefined; flags?: any }) {
+/** Coloured health score pill — matches ConversationDetail style.
+ * memo'd: rendered once per table row, so it shouldn't re-render on every
+ * parent state change (search typing, polling) when its props are unchanged. */
+const HealthBadge = memo(function HealthBadge({ score, flags }: { score: number | null | undefined; flags?: any }) {
   if (score == null) return <span style={{ color: '#4b5563', fontSize: 11 }}>—</span>;
   const pct = Math.round(score * 100);
   const color = pct >= 70 ? '#10b981' : pct >= 40 ? '#f59e0b' : '#ef4444';
@@ -53,7 +55,7 @@ function HealthBadge({ score, flags }: { score: number | null | undefined; flags
       </Tag>
     </Tooltip>
   );
-}
+});
 
 const SOURCE_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
   proxy: { label: 'Proxy', color: 'blue', icon: <ThunderboltOutlined /> },

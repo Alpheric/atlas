@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Typography, Card, Table, Tag, Button, Modal, Form, Input, InputNumber, Select, Space, Progress, App } from 'antd';
 import { PlusOutlined, DeleteOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -11,37 +12,40 @@ const deleteAccount = (id: string) => api.delete(`/admin/accounts/${id}`).then(r
 const testAccount = (id: string) => api.post(`/admin/accounts/${id}/test`).then(r => r.data);
 
 export default function Accounts() {
-  const [accounts, setAccounts] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [form] = Form.useForm();
   const { message: msgApi } = App.useApp();
+  const qc = useQueryClient();
 
-  const load = () => {
-    setLoading(true);
-    getAccounts().then(d => setAccounts(d.data || [])).catch(() => {}).finally(() => setLoading(false));
-  };
-  useEffect(load, []);
+  const { data: accounts = [], isLoading: loading } = useQuery<any[]>({
+    queryKey: ['accounts'],
+    queryFn: async () => (await getAccounts()).data ?? [],
+  });
 
-  const handleCreate = async () => {
-    setCreating(true);
-    try {
-      const values = await form.validateFields();
-      await createAccount(values);
+  const createMut = useMutation({
+    mutationFn: createAccount,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['accounts'] });
       msgApi.success('Account created');
       setModalOpen(false);
       form.resetFields();
-      load();
-    } catch {}
-    setCreating(false);
+    },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: deleteAccount,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['accounts'] });
+      msgApi.success('Account deleted');
+    },
+  });
+
+  const handleCreate = async () => {
+    const values = await form.validateFields();
+    await createMut.mutateAsync(values);
   };
 
-  const handleDelete = async (id: string) => {
-    await deleteAccount(id);
-    msgApi.success('Account deleted');
-    load();
-  };
+  const handleDelete = (id: string) => deleteMut.mutate(id);
 
   const handleTest = async (id: string) => {
     try {
@@ -94,7 +98,7 @@ export default function Accounts() {
           pagination={{ pageSize: 25, showTotal: (t) => `${t} accounts` }} scroll={{ x: 1100 }} />
       </Card>
 
-      <Modal title="Add Provider Account" open={modalOpen} onOk={handleCreate} onCancel={() => setModalOpen(false)} confirmLoading={creating} okText="Add Account">
+      <Modal title="Add Provider Account" open={modalOpen} onOk={handleCreate} onCancel={() => setModalOpen(false)} confirmLoading={createMut.isPending} okText="Add Account">
         <Form form={form} layout="vertical" initialValues={{ provider: 'anthropic', priority: 0 }}>
           <Form.Item name="provider" label="Provider" rules={[{ required: true }]}>
             <Select options={[
