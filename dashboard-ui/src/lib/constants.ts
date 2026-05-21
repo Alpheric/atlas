@@ -12,6 +12,9 @@ export const ROLE_PAGE_ACCESS: Record<string, Role[]> = {
   '/analytics': ['admin', 'operator', 'viewer'],
   '/import': ['admin', 'operator'],
   '/settings': ['admin'],
+  '/evals': ['admin', 'operator'],
+  '/prompts': ['admin', 'operator'],
+  '/cost': ['admin', 'operator', 'viewer'],
 };
 
 export const ROLE_WRITE_ACCESS: Record<string, Role[]> = {

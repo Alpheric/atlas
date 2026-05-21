@@ -13,6 +13,9 @@ import {
   CodeOutlined,
   UserOutlined,
   MedicineBoxOutlined,
+  FileTextOutlined,
+  DollarOutlined,
+  CheckSquareOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
@@ -29,7 +32,10 @@ const allItems = [
   { key: '/models', icon: <AppstoreOutlined />, label: 'Models' },
   { key: '/playground', icon: <CodeOutlined />, label: 'Playground' },
   { key: '/training', icon: <ExperimentOutlined />, label: 'Training' },
+  { key: '/evals', icon: <CheckSquareOutlined />, label: 'Evals' },
+  { key: '/prompts', icon: <FileTextOutlined />, label: 'Prompts' },
   { key: '/analytics', icon: <BarChartOutlined />, label: 'Analytics' },
+  { key: '/cost', icon: <DollarOutlined />, label: 'Cost & Ops' },
   { key: '/import', icon: <ImportOutlined />, label: 'Import' },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ];

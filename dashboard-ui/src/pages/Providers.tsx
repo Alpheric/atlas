@@ -1,20 +1,29 @@
 import { useEffect, useState } from 'react';
-import { Typography, Card, Button, Tag, Table, Row, Col, Badge, App } from 'antd';
+import { Typography, Card, Button, Tag, Table, Row, Col, Badge, App, Tooltip } from 'antd';
 import { ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
-import { getProviders, refreshProviders, getModels } from '../lib/api';
+import { getProviders, refreshProviders, getModels, getProviderCircuit } from '../lib/api';
 import PageSkeleton from '../components/shared/PageSkeleton';
+
+const circuitColor: Record<string, string> = { closed: 'green', half_open: 'gold', open: 'red' };
 
 export default function Providers() {
   const [providers, setProviders] = useState<any[]>([]);
   const [models, setModels] = useState<any[]>([]);
+  const [circuit, setCircuit] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const { message } = App.useApp();
 
   const load = () => {
     setLoading(true);
-    Promise.all([getProviders(), getModels()])
-      .then(([p, m]) => { setProviders(p.data || []); setModels(m.data || []); })
+    Promise.all([getProviders(), getModels(), getProviderCircuit().catch(() => ({ data: [] }))])
+      .then(([p, m, c]) => {
+        setProviders(p.data || []);
+        setModels(m.data || []);
+        const cmap: Record<string, any> = {};
+        for (const b of (c.data || [])) cmap[b.provider] = b;
+        setCircuit(cmap);
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   };
@@ -50,6 +59,15 @@ export default function Providers() {
                   {p.name}
                 </Typography.Title>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>{p.models?.length ?? 0} models</Typography.Text>
+                {circuit[p.name] && (
+                  <div style={{ marginTop: 6 }}>
+                    <Tooltip title={`Circuit breaker: ${circuit[p.name].state}${circuit[p.name].consecutive_failures ? ` · ${circuit[p.name].consecutive_failures} consecutive failures` : ''}`}>
+                      <Tag color={circuitColor[circuit[p.name].state] || 'default'} style={{ fontSize: 11 }}>
+                        breaker: {circuit[p.name].state}
+                      </Tag>
+                    </Tooltip>
+                  </div>
+                )}
                 <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                   {(p.models || []).map((m: string) => <Tag key={m} color="blue" style={{ fontSize: 11 }}>{m}</Tag>)}
                 </div>

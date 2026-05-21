@@ -21,6 +21,9 @@ const Models = React.lazy(() => import('./pages/Models'));
 const Playground = React.lazy(() => import('./pages/Playground'));
 const Users = React.lazy(() => import('./pages/Users'));
 const Healing = React.lazy(() => import('./pages/Healing'));
+const Prompts = React.lazy(() => import('./pages/Prompts'));
+const Evals = React.lazy(() => import('./pages/Evals'));
+const CostOps = React.lazy(() => import('./pages/CostOps'));
 
 function PageWrapper({ children, skeleton }: { children: React.ReactNode; skeleton?: string }) {
   return (
@@ -56,6 +59,9 @@ export default function App() {
                 <Route path="/settings" element={<PageWrapper skeleton="form"><SettingsPage /></PageWrapper>} />
                 <Route path="/users" element={<PageWrapper skeleton="table"><Users /></PageWrapper>} />
                 <Route path="/healing" element={<PageWrapper><Healing /></PageWrapper>} />
+                <Route path="/prompts" element={<PageWrapper skeleton="table"><Prompts /></PageWrapper>} />
+                <Route path="/evals" element={<PageWrapper skeleton="table"><Evals /></PageWrapper>} />
+                <Route path="/cost" element={<PageWrapper><CostOps /></PageWrapper>} />
               </Routes>
             </AppLayout>
           </ProtectedRoute>

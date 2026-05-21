@@ -186,4 +186,44 @@ export const getDailyStats = (days = 7) =>
   api.get('/admin/analytics/daily-stats', { params: { days } }).then((r) => r.data);
 export const getLatencyAnalytics = () => api.get('/admin/analytics/latency').then((r) => r.data);
 
+// --- Cost attribution (Phase 2.2) ---
+export const getCostByWorkspace = (days = 30) =>
+  api.get('/admin/analytics/cost-by-workspace', { params: { days } }).then((r) => r.data);
+export const getCostByKey = (days = 30, limit = 100) =>
+  api.get('/admin/analytics/cost-by-key', { params: { days, limit } }).then((r) => r.data);
+
+// --- Anomaly detection (Phase 2.5) ---
+export const getAnomalies = (limit = 50) =>
+  api.get('/admin/analytics/anomalies', { params: { limit } }).then((r) => r.data);
+
+// --- Circuit breaker (Phase 3.3) ---
+export const getProviderCircuit = () =>
+  api.get('/admin/providers/circuit').then((r) => r.data);
+
+// --- Routing replay (Phase 3.2) ---
+export const runRoutingReplay = (candidate: Record<string, string>, days = 30) =>
+  api.post('/admin/routing/replay', { candidate, days }).then((r) => r.data);
+
+// --- Prompt versioning (Phase 2.1) ---
+export const getPrompts = () => api.get('/admin/prompts').then((r) => r.data);
+export const getPromptVersions = (name: string) =>
+  api.get(`/admin/prompts/${name}`).then((r) => r.data);
+export const createPrompt = (data: {
+  name: string; content: string; model?: string; description?: string; activate?: boolean; created_by?: string;
+}) => api.post('/admin/prompts', data).then((r) => r.data);
+export const activatePromptVersion = (name: string, version: number) =>
+  api.post(`/admin/prompts/${name}/activate/${version}`).then((r) => r.data);
+
+// --- Eval datasets + runs (Phase 2.3) ---
+export const getEvalDatasets = () => api.get('/admin/eval/datasets').then((r) => r.data);
+export const createEvalDataset = (data: { name: string; description?: string; task_type?: string }) =>
+  api.post('/admin/eval/datasets', data).then((r) => r.data);
+export const promoteEvalFromDistillation = (data: {
+  dataset_name: string; task_type?: string; min_quality?: number; limit?: number; description?: string;
+}) => api.post('/admin/eval/datasets/promote-from-distillation', data).then((r) => r.data);
+export const createEvalRun = (data: { dataset_id: string; model: string }) =>
+  api.post('/admin/eval/runs', data).then((r) => r.data);
+export const getEvalRuns = () => api.get('/admin/eval/runs').then((r) => r.data);
+export const getEvalRun = (id: string) => api.get(`/admin/eval/runs/${id}`).then((r) => r.data);
+
 export default api;
