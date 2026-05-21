@@ -78,6 +78,31 @@ ${projectContext.summary}
 - After completing an action, give a brief summary of what was done.
 - Always prefer targeted edits (\`edit_file\`) over full rewrites (\`write_file\`) for existing files.
 - Run tests/build after making code changes when appropriate.
+
+## Following instructions (do not deviate)
+
+- Follow the user's explicit instructions exactly. If they say "use inline CSS",
+  use inline CSS — do not substitute your own preferred approach. If you believe
+  a different approach is better, do it their way first, then note the suggestion.
+- If you say you will do something ("applying the fix now"), actually call the
+  tool in the same turn. Never confirm an action and then refuse or stall.
+
+## Accuracy (never fabricate)
+
+- Do not state facts you are unsure of — especially product names, model names,
+  versions, or APIs. If you don't know, say so or use \`web_search\` to verify.
+- Never invent libraries, flags, or model names (e.g. do not assert a "GPT-5"
+  variant exists without verifying). When asked about something you don't
+  recognise, search before answering rather than refusing.
+
+## Avoid loops and wasted work
+
+- Track what you have already done this session. Do not re-create directories or
+  files you already created, and do not re-run a command that already succeeded.
+- If the same tool call fails or returns the same result twice, change strategy
+  — do not repeat it. After two failed attempts at the same thing, stop and
+  report what is blocking you instead of retrying identically.
+- Confirm the working directory before assuming it; if it's ambiguous, ask.
 ${customInstructions ? `\n## Project Instructions\n\n${customInstructions}` : ""}`;
 }
 
@@ -164,6 +189,14 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
   let finalUsage: UsageInfo | undefined;
   let config = { ...opts.config };
 
+  // Loop / no-progress detection (BUG-10, BUG-13): count identical tool calls
+  // (name + args) across turns. After SOFT_LIMIT we nudge the model; after
+  // HARD_LIMIT we abort the loop so it can't repeat mkdir/ls/etc. forever.
+  const toolCallCounts = new Map<string, number>();
+  const LOOP_SOFT_LIMIT = 3;
+  const LOOP_HARD_LIMIT = 6;
+  let loopAborted = false;
+
   // Auto-route model if enabled
   if (opts.autoRoute) {
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
@@ -204,6 +237,11 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
         }
       }
     } catch (err: unknown) {
+      // BUG-01: preserve partial assistant text on timeout/abort so work isn't
+      // silently lost. Push whatever streamed before the failure.
+      if (assistantText.trim()) {
+        messages.push({ role: "assistant", content: assistantText });
+      }
       if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) {
         await onEvent({ type: "done", usage: finalUsage });
         break;
@@ -237,6 +275,36 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
     // ── Execute each tool call, append tool result messages ────────────────
     // (OpenAI requires one tool result message per tool call)
     for (const call of pendingToolCalls) {
+      // ── Loop / no-progress guard (BUG-10, BUG-13) ─────────────────────────
+      const sig = `${call.name}:${JSON.stringify(call.args)}`;
+      const seen = (toolCallCounts.get(sig) ?? 0) + 1;
+      toolCallCounts.set(sig, seen);
+
+      if (seen > LOOP_HARD_LIMIT) {
+        await onEvent({
+          type: "tool_result",
+          toolResult: `[Loop aborted: '${call.name}' was called ${seen} times with identical arguments without progress.]`,
+        });
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content:
+            `[Loop detected] You have called ${call.name} with the same arguments ` +
+            `${seen} times. This is being blocked. Stop repeating this call; either ` +
+            `take a different action or stop and report what is blocking you.`,
+        });
+        loopAborted = true;
+        continue;
+      }
+
+      if (seen >= LOOP_SOFT_LIMIT) {
+        // Let it run once more but inject a nudge alongside the result later.
+        await onEvent({
+          type: "chunk",
+          text: `\n_[warning: '${call.name}' repeated ${seen}× — may be looping]_\n`,
+        });
+      }
+
       await onEvent({ type: "tool_call", toolCall: { name: call.name, args: call.args } });
 
       const gate = safetyGate(call, workspaceRoot, permissions);
@@ -341,6 +409,16 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
         tool_call_id: call.id,
         content: toolResult,
       });
+    }
+
+    // BUG-10: a hard loop was detected this turn — stop the agent loop so it
+    // can't keep hammering the same call across turns.
+    if (loopAborted) {
+      await onEvent({
+        type: "error",
+        error: "Stopped: the agent was repeating the same action without making progress.",
+      });
+      break;
     }
   }
 
