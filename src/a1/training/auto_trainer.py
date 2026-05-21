@@ -893,16 +893,23 @@ async def _check_and_trigger_training(session: AsyncSession, task_type: str, sam
 
     dual_repo = DualExecutionRepo(session)
     # Quality gate: only use samples meeting the distillation quality threshold
-    training_records = await dual_repo.get_unused_for_training(
+    candidate_records = await dual_repo.get_unused_for_training(
         task_type,
         min_quality=settings.distillation_quality_threshold,
-        limit=sample_count,
+        limit=sample_count * 2,  # over-fetch; some get filtered as poison/garbage
     )
+    # Pollution filter: skip poison/error/too-short teacher responses so the
+    # fine-tune isn't trained on garbage (e.g. "Not logged in", PII tokens).
+    from a1.eval.runner import _is_clean_record
+
+    training_records = [r for r in candidate_records if _is_clean_record(r)][:sample_count]
+    skipped = len(candidate_records) - len(training_records)
     for rec in training_records:
         rec.used_for_training = True
     log.info(
         f"Marked {len(training_records)} records as used_for_training for {task_type}"
-        f" (quality_gate >= {settings.distillation_quality_threshold})"
+        f" (quality_gate >= {settings.distillation_quality_threshold}, "
+        f"skipped {skipped} poisoned/garbage)"
     )
 
     config = {

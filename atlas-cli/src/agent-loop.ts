@@ -219,6 +219,14 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
     let pendingToolCalls: NativeToolCall[] = [];
     let assistantText = "";
 
+    // BUG-11: thinking-loop guard. Detect when the model streams the same
+    // non-trivial line over and over (reasoning that never terminates) and
+    // abort the stream instead of letting it run forever.
+    const lineRepeat = new Map<string, number>();
+    let pendingLine = "";
+    let thinkingLoop = false;
+    const LINE_REPEAT_LIMIT = 12;
+
     // ── Stream model response ──────────────────────────────────────────────
     try {
       const fullMessages: Message[] = [
@@ -230,11 +238,39 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
         if (event.type === "text") {
           assistantText += event.content;
           await onEvent({ type: "chunk", text: event.content });
+
+          // Repetition detection on completed lines.
+          pendingLine += event.content;
+          let nl: number;
+          while ((nl = pendingLine.indexOf("\n")) >= 0) {
+            const line = pendingLine.slice(0, nl).trim();
+            pendingLine = pendingLine.slice(nl + 1);
+            if (line.length >= 25) {
+              const c = (lineRepeat.get(line) ?? 0) + 1;
+              lineRepeat.set(line, c);
+              if (c > LINE_REPEAT_LIMIT) {
+                thinkingLoop = true;
+                break;
+              }
+            }
+          }
+          if (thinkingLoop) break; // stop consuming the stream
         } else if (event.type === "tool_calls") {
           pendingToolCalls = event.calls;
         } else if (event.type === "usage") {
           finalUsage = event.usage;
         }
+      }
+
+      if (thinkingLoop) {
+        if (assistantText.trim()) {
+          messages.push({ role: "assistant", content: assistantText });
+        }
+        await onEvent({
+          type: "error",
+          error: "Stopped: the model was repeating the same reasoning without completing.",
+        });
+        break;
       }
     } catch (err: unknown) {
       // BUG-01: preserve partial assistant text on timeout/abort so work isn't
@@ -403,11 +439,32 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
 
       await onEvent({ type: "tool_result", toolResult });
 
+      // BUG-04: when a tool fails, append an explicit recovery directive so the
+      // model diagnoses and tries a *different* approach instead of giving up
+      // or silently retrying the same thing. The loop guard above prevents
+      // identical retries; this nudges toward an actual fix.
+      let toolMessage = toolResult;
+      if (!success) {
+        const tries = toolCallCounts.get(sig) ?? 1;
+        if (tries === 1) {
+          toolMessage +=
+            "\n\n[Recovery] This call failed. Diagnose the cause from the error " +
+            "above and take a corrective action (e.g. read the relevant file/logs, " +
+            "fix the underlying issue, or adjust the command). Do not repeat the " +
+            "same call unchanged.";
+        } else {
+          toolMessage +=
+            `\n\n[Recovery] This has now failed ${tries} times. Stop retrying this ` +
+            "approach. Either try a materially different strategy or stop and report " +
+            "exactly what is blocking you.";
+        }
+      }
+
       // Append tool result as role="tool" message
       messages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: toolResult,
+        content: toolMessage,
       });
     }
 
