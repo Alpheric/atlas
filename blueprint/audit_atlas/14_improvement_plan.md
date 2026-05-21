@@ -147,3 +147,48 @@ server. These are the things that need YOUR call:
   onto the new prompt registry when you want them versioned/A-B-able.
 - deepseek-r1 ctx capped to 16384 — verify it's fast enough on your GPUs under
   real load (worked at ~17s warm in testing).
+
+
+---
+
+## ⚠️ Critical finding (2026-05-12 overnight run)
+
+While wiring up eval datasets I discovered **the distillation training data is
+polluted**. `dual_execution_records` for `code` (all 15 with quality_score>=0.7)
+replay to garbage: PII-masked tokens ("PIN-4", "RR-WHISKEY") and stored CLI
+errors ("Not logged in · Please run /login"). The LLM judge correctly scored
+them ~0.03.
+
+Implications:
+- **Eval sets can't be auto-built from distillation data yet** — request_messages
+  are stored PII-MASKED, and many teacher responses are error text, not answers.
+- **This likely hurts actual fine-tuning too** — the same poisoned pairs feed
+  QLoRA training. Worth auditing what's being trained on.
+
+What I did in response:
+- Hardened `promote_from_distillation` to skip poison/error/too-short records
+  (committed). For `code` it now correctly yields 0 items rather than garbage.
+- **Disabled the distillation eval gate again** (A1_DISTILLATION_EVAL_GATE_ENABLED
+  =false) — with no trustworthy dataset it would have blocked ALL handoffs.
+- Deleted the 4 polluted demo datasets.
+- **Left LLM-judge ENABLED** (sample 0.2) — it works correctly.
+
+Recommended follow-up (needs your decision):
+1. Decide whether distillation should store UNMASKED prompts for training/eval
+   (privacy tradeoff), or build eval sets from a separate curated source.
+2. Audit fine-tuning inputs for the same pollution before trusting graduated
+   local models.
+3. Once a clean eval set exists, re-enable A1_DISTILLATION_EVAL_GATE_ENABLED=true.
+
+## Live config state after overnight run
+- A1_QUALITY_LLM_JUDGE_ENABLED=true (sample 0.2)  ← ON
+- A1_DISTILLATION_EVAL_GATE_ENABLED=false          ← OFF (intentional, see above)
+- Anomaly detection: ON (no webhook set)
+- Circuit breaker: ON
+- Langfuse: OFF (needs docker + keys)
+
+## Routing cost projections (real 30d history, 2699 decisions)
+- All traffic → local qwen2.5-coder:7b: $107.07 → $0  (savings $107)
+- code/coding → local qwen:             $107.07 → $39.55 (savings $67.5, 720 routes)
+- chat/general → gemini-2.5-flash-lite: $107.07 → $19.39 (savings $87.7, 1917 routes)
+  (cost projection only — validate quality with eval runs before shifting)
