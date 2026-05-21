@@ -1,4 +1,4 @@
-name: Lint
+name: CI
 
 on:
   push:
@@ -17,3 +17,19 @@ jobs:
       - run: pip install ruff
       - name: ruff check
         run: ruff check src/ tests/
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - name: type-check + build
+        run: npm run build
+      - name: unit tests
+        run: npm test
