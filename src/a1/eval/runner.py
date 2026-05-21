@@ -136,6 +136,35 @@ async def run_eval(run_id: str) -> None:
     )
 
 
+# Signals that a stored teacher response is an error/garbage, not a real answer.
+_POISON_SIGNALS = (
+    "not logged in",
+    "please run /login",
+    "cli exit code",
+    "no healthy",
+    "timed out after",
+    "rate limit",
+    "overloaded",
+    "internal server error",
+    "authentication",
+)
+
+
+def _is_clean_record(rec) -> bool:
+    """Reject records unsuitable as eval items: error/poison responses, too-short
+    answers, or empty inputs. (Note: request_messages may still contain
+    PII-masked tokens — those need an unmasked source for a high-quality set.)"""
+    resp = (rec.claude_response or "").strip()
+    if len(resp) < 40:
+        return False
+    low = resp.lower()
+    if any(sig in low for sig in _POISON_SIGNALS):
+        return False
+    if not rec.request_messages:
+        return False
+    return True
+
+
 async def promote_from_distillation(
     dataset_name: str,
     task_type: str | None = None,
@@ -171,11 +200,18 @@ async def promote_from_distillation(
             )
             if task_type:
                 q = q.where(DualExecutionRecord.task_type == task_type)
-            q = q.order_by(DualExecutionRecord.quality_score.desc()).limit(limit)
+            # Over-fetch then filter out poisoned/garbage records below.
+            q = q.order_by(DualExecutionRecord.quality_score.desc()).limit(limit * 4)
             records = (await db.execute(q)).scalars().all()
 
             added = 0
+            skipped = 0
             for rec in records:
+                if added >= limit:
+                    break
+                if not _is_clean_record(rec):
+                    skipped += 1
+                    continue
                 db.add(
                     EvalItem(
                         id=uuid.uuid4(),
@@ -187,6 +223,8 @@ async def promote_from_distillation(
                     )
                 )
                 added += 1
+            if skipped:
+                log.info(f"[eval] skipped {skipped} poisoned/garbage records")
 
     log.info(f"[eval] promoted {added} items into dataset '{dataset_name}'")
     return {"dataset": dataset_name, "items_added": added}
