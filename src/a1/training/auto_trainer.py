@@ -91,16 +91,16 @@ def _get_external_provider(atlas_model: str = ""):
     return None, None, None
 
 
-def _inject_atlas_identity(request, atlas_model: str) -> None:
+async def _inject_atlas_identity(request, atlas_model: str) -> None:
     """Inject Atlas base identity + domain suffix into request messages (in-place).
 
     This must be called before sending to any external provider that does not
     internally embed the Atlas persona (i.e. everything except ClaudeCLIProvider).
     """
-    from a1.providers.claude_cli import get_atlas_system_suffix
+    from a1.providers.claude_cli import get_atlas_system_suffix_async
     from a1.proxy.request_models import MessageInput
 
-    domain_suffix = get_atlas_system_suffix(atlas_model)
+    domain_suffix = await get_atlas_system_suffix_async(atlas_model)
     parts = [_ATLAS_BASE_IDENTITY]
     if domain_suffix:
         parts.append(domain_suffix)
@@ -361,7 +361,7 @@ async def handle_dual_execution(
     # Inject Atlas identity + domain suffix (claude-cli does this internally,
     # all other providers need explicit injection)
     if provider_name != "claude-cli":
-        _inject_atlas_identity(request, original_model)
+        await _inject_atlas_identity(request, original_model)
 
     # Snapshot messages for training record BEFORE provider call modifies anything
     messages_dicts = [m.model_dump(exclude_none=True) for m in request.messages]
@@ -525,7 +525,7 @@ async def handle_dual_execution_stream(
     request.model = external_model
 
     if provider_name != "claude-cli":
-        _inject_atlas_identity(request, original_model)
+        await _inject_atlas_identity(request, original_model)
 
     messages_dicts = [m.model_dump(exclude_none=True) for m in request.messages]
     start_time = time.time()

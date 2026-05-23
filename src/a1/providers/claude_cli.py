@@ -61,6 +61,21 @@ def get_atlas_system_suffix(atlas_model: str) -> str:
     return _atlas_suffixes.get(atlas_model, "")
 
 
+async def get_atlas_system_suffix_async(atlas_model: str) -> str:
+    """Registry-aware suffix lookup. An active prompt version named
+    ``atlas_suffix:<model>`` overrides the providers.yaml value, so the 7 Atlas
+    system-prompt suffixes become editable/versionable via the Prompts UI
+    without a redeploy. Falls back to the YAML suffix (this function's sync
+    counterpart) when no override exists."""
+    yaml_default = get_atlas_system_suffix(atlas_model)
+    try:
+        from a1.common.prompt_registry import get_prompt
+
+        return await get_prompt(f"atlas_suffix:{atlas_model}", default=yaml_default)
+    except Exception:
+        return yaml_default
+
+
 # Models available through Claude CLI (Max subscription)
 CLAUDE_CLI_MODELS = [
     ModelInfo(
