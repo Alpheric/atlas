@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Typography, Card, Table, Tag, Space, Row, Col, Statistic, Button,
   Progress, Badge, Select,
@@ -37,41 +38,35 @@ const ATLAS_INFO: Record<string, { icon: any; color: string; description: string
 };
 
 export default function Routing() {
-  const [decisions, setDecisions] = useState<any[]>([]);
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
-  const [distillation, setDistillation] = useState<any>(null);
-  const [overview, setOverview] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [taskFilter, setTaskFilter] = useState<string | undefined>();
   const [dateRange, setDateRange] = useState<[string | null, string | null]>([null, null]);
 
-  const load = () => {
-    setLoading(true);
-    const routingParams: any = { limit: 200 };
-    if (dateRange[0]) routingParams.date_from = dateRange[0];
-    if (dateRange[1]) routingParams.date_to = dateRange[1];
-    if (taskFilter) routingParams.task_type = taskFilter;
+  // Filters live in the queryKey, so changing them refetches automatically.
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['routingBundle', taskFilter, dateRange[0], dateRange[1]],
+    queryFn: async () => {
+      const routingParams: any = { limit: 200 };
+      if (dateRange[0]) routingParams.date_from = dateRange[0];
+      if (dateRange[1]) routingParams.date_to = dateRange[1];
+      if (taskFilter) routingParams.task_type = taskFilter;
+      const [d, lb, dist, ov] = await Promise.all([
+        getRoutingDecisions(routingParams),
+        getModelLeaderboard().catch(() => ({ data: [] })),
+        getDistillationOverview().catch(() => null),
+        getOverview().catch(() => null),
+      ]);
+      return { decisions: d.data || [], leaderboard: lb.data || [], distillation: dist, overview: ov };
+    },
+    refetchInterval: 10_000,
+  });
 
-    Promise.all([
-      getRoutingDecisions(routingParams),
-      getModelLeaderboard().catch(() => ({ data: [] })),
-      getDistillationOverview().catch(() => null),
-      getOverview().catch(() => null),
-    ])
-      .then(([d, lb, dist, ov]) => {
-        setDecisions(d.data || []);
-        setLeaderboard(lb.data || []);
-        setDistillation(dist);
-        setOverview(ov);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  };
+  const decisions: any[] = data?.decisions ?? [];
+  const leaderboard: any[] = data?.leaderboard ?? [];
+  const distillation = data?.distillation ?? null;
+  const overview = data?.overview ?? null;
+  const load = () => refetch();
 
-  useEffect(load, [taskFilter, dateRange]);
-  useEffect(() => { const t = setInterval(load, 10000); return () => clearInterval(t); }, []);
-
-  if (loading) return <PageSkeleton type="table" />;
+  if (isLoading) return <PageSkeleton type="table" />;
 
   // KPIs derived from DB-backed decisions (survive server restarts)
   const totalReqs = decisions.length || overview?.metrics?.request_count || 0;

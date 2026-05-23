@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
 import {
   Card, Tag, Button, Descriptions, Typography, Space, App, Tooltip,
@@ -173,17 +174,16 @@ function QualitySignals({ signals }: { signals: any[] }) {
 // ── Main component ───────────────────────────────────────────────────────────
 export default function ConversationDetail() {
   const { id } = useParams();
-  const [conv, setConv]             = useState<any>(null);
-  const [loading, setLoading]       = useState(true);
   const [regenIds, setRegenIds]     = useState<Set<string>>(new Set());
   const [feedbackIds, setFeedbackIds] = useState<Record<string, 'up' | 'down'>>({});
   const { message: messageApi }     = App.useApp();
 
-  const reload = () => {
-    if (id) getConversation(id).then(setConv).catch(() => {}).finally(() => setLoading(false));
-  };
-
-  useEffect(() => { reload(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data: conv, isLoading: loading, refetch } = useQuery<any>({
+    queryKey: ['conversation', id],
+    queryFn: () => getConversation(id as string),
+    enabled: !!id,
+  });
+  const reload = () => refetch();
 
   if (loading) return <PageSkeleton type="detail" />;
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Typography, Card, Row, Col, Statistic, Table, Tag, Progress, Space,
   Badge, Button, Alert, Spin, Empty,
@@ -53,28 +53,30 @@ function FlagTags({ flags }: { flags: any }) {
 }
 
 export default function Healing() {
-  const [healthRows, setHealthRows] = useState<any[]>([]);
-  const [overview, setOverview] = useState<any>(null);
-  const [dailyStats, setDailyStats] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
-  const load = () => {
-    setLoading(true);
-    Promise.all([
-      getConversationHealth(200),
-      getOverview().catch(() => null),
-      getDailyStats().catch(() => []),
-    ])
-      .then(([health, ov, daily]) => {
-        setHealthRows(health.data || []);
-        setOverview(ov);
-        setDailyStats(daily || []);
-      })
-      .finally(() => setLoading(false));
-  };
+  const healthQuery = useQuery<any[]>({
+    queryKey: ['conversationHealth', 200],
+    queryFn: async () => (await getConversationHealth(200)).data ?? [],
+  });
+  const overviewQuery = useQuery<any>({
+    queryKey: ['overview'],
+    queryFn: () => getOverview().catch(() => null),
+  });
+  const dailyQuery = useQuery<any[]>({
+    queryKey: ['dailyStats'],
+    queryFn: () => getDailyStats().catch(() => []),
+  });
 
-  useEffect(() => { load(); }, []);
+  const healthRows = healthQuery.data ?? [];
+  const overview = overviewQuery.data ?? null;
+  const dailyStats = dailyQuery.data ?? [];
+  const loading = healthQuery.isFetching;
+  const load = () => {
+    healthQuery.refetch();
+    overviewQuery.refetch();
+    dailyQuery.refetch();
+  };
 
   // --- Computed stats ---
   const total = healthRows.length;

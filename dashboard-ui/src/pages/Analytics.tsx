@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Typography, Card, Row, Col, Table, Tag, Progress, Tooltip } from 'antd';
 import {
   ThunderboltOutlined, FieldNumberOutlined, ClockCircleOutlined,
@@ -102,32 +103,36 @@ function RequestHeatmap({ data }: { data: Array<{ day: string; hour: number; cou
 }
 
 export default function Analytics() {
-  const [metrics, setMetrics] = useState<any>(null);
-  const [decisions, setDecisions] = useState<any[]>([]);
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
-  const [tokenSeries, setTokenSeries] = useState<any[]>([]);
-  const [costSeries, setCostSeries] = useState<any[]>([]);
-  const [heatmapData, setHeatmapData] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const [dateRange, setDateRange] = useState<[string | null, string | null]>([null, null]);
 
-  useEffect(() => {
-    Promise.all([
-      getMetrics(),
-      getRoutingDecisions({ limit: 200 }),
-      getModelLeaderboard().catch(() => ({ data: [] })),
-      getTokenTimeseries().catch(() => ({ data: [] })),
-      getCostTimeseries().catch(() => ({ data: [] })),
-      getRequestHeatmap().catch(() => ({ data: [] })),
-    ]).then(([m, d, lb, ts, cs, hm]) => {
-      setMetrics(m);
-      setDecisions(d.data || []);
-      setLeaderboard(lb.data || []);
-      setTokenSeries(ts.data || []);
-      setCostSeries(cs.data || []);
-      setHeatmapData(hm.data || []);
-    }).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  const { data, isLoading: loading } = useQuery({
+    queryKey: ['analyticsBundle'],
+    queryFn: async () => {
+      const [m, d, lb, ts, cs, hm] = await Promise.all([
+        getMetrics(),
+        getRoutingDecisions({ limit: 200 }),
+        getModelLeaderboard().catch(() => ({ data: [] })),
+        getTokenTimeseries().catch(() => ({ data: [] })),
+        getCostTimeseries().catch(() => ({ data: [] })),
+        getRequestHeatmap().catch(() => ({ data: [] })),
+      ]);
+      return {
+        metrics: m,
+        decisions: d.data || [],
+        leaderboard: lb.data || [],
+        tokenSeries: ts.data || [],
+        costSeries: cs.data || [],
+        heatmapData: hm.data || [],
+      };
+    },
+  });
+
+  const metrics = data?.metrics ?? null;
+  const decisions: any[] = data?.decisions ?? [];
+  const leaderboard: any[] = data?.leaderboard ?? [];
+  const tokenSeries: any[] = data?.tokenSeries ?? [];
+  const costSeries: any[] = data?.costSeries ?? [];
+  const heatmapData: any[] = data?.heatmapData ?? [];
 
   if (loading) return <PageSkeleton />;
 
