@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { Typography, Card, Form, Input, Button, Result, Alert, Space, Upload, App } from 'antd';
 import { ImportOutlined, UploadOutlined, InboxOutlined } from '@ant-design/icons';
 import { triggerPaperclipImport } from '../lib/api';
@@ -6,24 +7,24 @@ import { triggerPaperclipImport } from '../lib/api';
 const { Dragger } = Upload;
 
 export default function Import() {
-  const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState('');
   const { message } = App.useApp();
 
-  const handlePaperclipImport = async (values: { api_url: string; api_key?: string }) => {
-    setImporting(true);
-    setError('');
-    setResult(null);
-    try {
-      const stats = await triggerPaperclipImport(values.api_url, values.api_key);
+  const importMut = useMutation({
+    mutationFn: (values: { api_url: string; api_key?: string }) =>
+      triggerPaperclipImport(values.api_url, values.api_key),
+    onMutate: () => { setError(''); setResult(null); },
+    onSuccess: (stats: any) => {
       setResult(stats);
       message.success(`Imported ${stats.imported} conversations`);
-    } catch (e: any) {
-      setError(e.response?.data?.detail || e.message || 'Import failed');
-    }
-    setImporting(false);
-  };
+    },
+    onError: (e: any) => setError(e.response?.data?.detail || e.message || 'Import failed'),
+  });
+  const importing = importMut.isPending;
+
+  const handlePaperclipImport = (values: { api_url: string; api_key?: string }) =>
+    importMut.mutate(values);
 
   return (
     <div style={{ maxWidth: 700 }}>

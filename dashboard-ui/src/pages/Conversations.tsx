@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Typography, Table, Tag, Input, Space, Card, Row, Col, Statistic, Badge, Button,
   Tooltip, Segmented, Select, Progress,
@@ -72,24 +73,26 @@ const SOURCE_CONFIG: Record<string, { label: string; color: string; icon: any }>
 };
 
 export default function Conversations() {
-  const [data, setData] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
-  const [stats, setStats] = useState<any>(null);
-  const [distillation, setDistillation] = useState<any>(null);
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [healthData, setHealthData] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [search, setSearch] = useState('');
   const [dateRange, setDateRange] = useState<[string | null, string | null]>([null, null]);
   const [sourceFilter, setSourceFilter] = useState<string | undefined>(undefined);
-  const [dynamicSources, setDynamicSources] = useState<string[]>([]);
   const [view, setView] = useState<'conversations' | 'sessions'>('conversations');
   const navigate = useNavigate();
 
-  // Track previous filter values to detect changes and reset page
+  // Reset to page 1 whenever a filter changes (the queryKey then refetches).
   const prevFilters = useRef({ search, dateRange, sourceFilter });
+  useEffect(() => {
+    const prev = prevFilters.current;
+    const filtersChanged =
+      prev.search !== search ||
+      prev.dateRange[0] !== dateRange[0] ||
+      prev.dateRange[1] !== dateRange[1] ||
+      prev.sourceFilter !== sourceFilter;
+    prevFilters.current = { search, dateRange, sourceFilter };
+    if (filtersChanged && page !== 1) setPage(1);
+  }, [search, dateRange, sourceFilter, page]);
 
   const buildQueryParams = (p: number, ps: number) => ({
     limit: ps,
@@ -100,53 +103,39 @@ export default function Conversations() {
     source: sourceFilter,
   });
 
-  const load = (p: number, ps: number) => {
-    setLoading(true);
-    Promise.all([
-      getConversations(buildQueryParams(p, ps)),
-      getConversationStats().catch(() => null),
-      getDistillationOverview().catch(() => null),
-      getSessions().catch(() => ({ data: [] })),
-      getConversationHealth(200).catch(() => ({ data: [] })),
-    ])
-      .then(([res, st, dist, sess, health]) => {
-        const rows = res.data || [];
-        setData(rows);
-        setTotal(res.total || 0);
-        setStats(st);
-        setDistillation(dist);
-        setSessions(sess.data || []);
-        setHealthData(health.data || []);
-        // Collect any source values not already in SOURCE_CONFIG
-        const seen = new Set<string>(rows.map((r: any) => r.source).filter(Boolean));
-        setDynamicSources(Array.from(seen));
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  };
+  // Single bundled query; filters/pagination live in the key so changes
+  // refetch automatically. 30s auto-refresh only on the conversations tab.
+  const { data: bundle, isLoading: loading, refetch } = useQuery({
+    queryKey: ['conversationsBundle', page, pageSize, search, dateRange[0], dateRange[1], sourceFilter],
+    queryFn: async () => {
+      const [res, st, dist, sess, health] = await Promise.all([
+        getConversations(buildQueryParams(page, pageSize)),
+        getConversationStats().catch(() => null),
+        getDistillationOverview().catch(() => null),
+        getSessions().catch(() => ({ data: [] })),
+        getConversationHealth(200).catch(() => ({ data: [] })),
+      ]);
+      return {
+        rows: res.data || [],
+        total: res.total || 0,
+        stats: st,
+        distillation: dist,
+        sessions: sess.data || [],
+        health: health.data || [],
+      };
+    },
+    refetchInterval: view === 'conversations' ? 30_000 : false,
+  });
 
-  useEffect(() => {
-    const prev = prevFilters.current;
-    const filtersChanged =
-      prev.search !== search ||
-      prev.dateRange[0] !== dateRange[0] ||
-      prev.dateRange[1] !== dateRange[1] ||
-      prev.sourceFilter !== sourceFilter;
-    prevFilters.current = { search, dateRange, sourceFilter };
-    // If a filter changed and page is not 1, reset to 1; the resulting page change re-triggers this effect
-    if (filtersChanged && page !== 1) {
-      setPage(1);
-    } else {
-      load(page, pageSize);
-    }
-  }, [page, pageSize, search, dateRange, sourceFilter]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Auto-refresh every 30 seconds when on conversations tab
-  useEffect(() => {
-    if (view !== 'conversations') return;
-    const timer = setInterval(() => load(page, pageSize), 30_000);
-    return () => clearInterval(timer);
-  }, [page, pageSize, search, dateRange, sourceFilter, view]); // eslint-disable-line react-hooks/exhaustive-deps
+  const data: any[] = bundle?.rows ?? [];
+  const total = bundle?.total ?? 0;
+  const stats = bundle?.stats ?? null;
+  const distillation = bundle?.distillation ?? null;
+  const sessions: any[] = bundle?.sessions ?? [];
+  const healthData: any[] = bundle?.health ?? [];
+  const dynamicSources = Array.from(
+    new Set<string>(data.map((r: any) => r.source).filter(Boolean)),
+  );
 
   const fetchAllForExport = async () => {
     const res = await getConversations({ ...buildQueryParams(1, 10000) });
@@ -302,7 +291,7 @@ export default function Conversations() {
           </Typography.Text>
         </div>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={() => load(page, pageSize)} size="small">Refresh</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => refetch()} size="small">Refresh</Button>
           <ExportDropdown data={data} filename="conversations" fetchAll={fetchAllForExport} />
         </Space>
       </div>

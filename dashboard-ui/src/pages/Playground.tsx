@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Typography, Card, Button, Input, Select, Slider, Row, Col, Space, Tag, Spin,
   Statistic, App, Tooltip,
@@ -24,7 +25,10 @@ interface PlaygroundResult {
 }
 
 export default function Playground() {
-  const [models, setModels] = useState<any[]>([]);
+  const { data: models = [] } = useQuery<any[]>({
+    queryKey: ['models'],
+    queryFn: async () => (await getModels()).data ?? [],
+  });
   const [selectedModel, setSelectedModel] = useState('atlas-plan');
   const [compareModel, setCompareModel] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
@@ -36,10 +40,6 @@ export default function Playground() {
   const [compareResult, setCompareResult] = useState<PlaygroundResult | null>(null);
   const [compareMode, setCompareMode] = useState(false);
   const { message } = App.useApp();
-
-  useEffect(() => {
-    getModels().then((m) => setModels(m.data || [])).catch(() => {});
-  }, []);
 
   const handleSend = async () => {
     if (!prompt.trim()) return;

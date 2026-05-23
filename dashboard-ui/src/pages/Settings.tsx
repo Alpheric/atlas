@@ -1,48 +1,45 @@
 import { useEffect, useState } from 'react';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { Typography, Card, Form, Input, InputNumber, Select, Slider, Button, Space, App } from 'antd';
 import { KeyOutlined, BranchesOutlined, ExperimentOutlined, SaveOutlined } from '@ant-design/icons';
 import { getSettings, saveSettings } from '../lib/api';
 
+const DEFAULT_SETTINGS = {
+  anthropic_api_key: '',
+  openai_api_key: '',
+  vertex_project_id: '',
+  ollama_base_url: 'http://localhost:11434',
+  default_strategy: 'best_quality',
+  exploration_rate: 0.1,
+  training_base_model: 'mistralai/Mistral-7B-Instruct-v0.3',
+  training_lora_rank: 16,
+  training_min_quality: 0.7,
+  training_min_samples: 500,
+};
+
 export default function SettingsPage() {
   const [form] = Form.useForm();
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const { message } = App.useApp();
 
-  useEffect(() => {
-    getSettings()
-      .then((data) => form.setFieldsValue(data))
-      .catch(() => {
-        // Backend may not support settings yet, use defaults
-        form.setFieldsValue({
-          anthropic_api_key: '',
-          openai_api_key: '',
-          vertex_project_id: '',
-          ollama_base_url: 'http://localhost:11434',
-          default_strategy: 'best_quality',
-          exploration_rate: 0.1,
-          training_base_model: 'mistralai/Mistral-7B-Instruct-v0.3',
-          training_lora_rank: 16,
-          training_min_quality: 0.7,
-          training_min_samples: 500,
-        });
-      })
-      .finally(() => setLoading(false));
-  }, []);
+  const { data, isLoading: loading } = useQuery({
+    queryKey: ['settings'],
+    // Backend may not support settings yet — fall back to defaults.
+    queryFn: () => getSettings().catch(() => DEFAULT_SETTINGS),
+  });
 
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const values = form.getFieldsValue();
-      await saveSettings(values);
-      message.success('Settings saved');
-      setDirty(false);
-    } catch {
-      message.error('Failed to save settings');
-    }
-    setSaving(false);
-  };
+  useEffect(() => {
+    if (data) form.setFieldsValue(data);
+  }, [data, form]);
+
+  const saveMut = useMutation({
+    mutationFn: saveSettings,
+    onSuccess: () => { message.success('Settings saved'); setDirty(false); },
+    onError: () => message.error('Failed to save settings'),
+  });
+  const saving = saveMut.isPending;
+
+  const handleSave = () => saveMut.mutate(form.getFieldsValue());
 
   return (
     <div style={{ maxWidth: 700 }}>

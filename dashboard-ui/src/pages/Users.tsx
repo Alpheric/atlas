@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Table, Button, Tag, Space, Modal, Form, Input, InputNumber, Select,
   Tooltip, Drawer, Descriptions, Statistic, Row, Col, Card, Typography,
@@ -65,8 +66,11 @@ interface NewKeyResult {
 }
 
 export default function UsersPage() {
-  const [users, setUsers] = useState<UserRecord[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { data: usersData, isFetching: loading, refetch: fetchUsers } = useQuery<UserRecord[]>({
+    queryKey: ['users'],
+    queryFn: async () => (await getUsers()).data ?? [],
+  });
+  const users = usersData ?? [];
 
   // Create user modal
   const [createOpen, setCreateOpen] = useState(false);
@@ -92,21 +96,6 @@ export default function UsersPage() {
   const [creatingKey, setCreatingKey] = useState(false);
   const [newKey, setNewKey] = useState<NewKeyResult | null>(null);
 
-  const fetchUsers = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await getUsers();
-      setUsers(data.data || []);
-    } catch (_) {
-      // error handled by interceptor
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchUsers();
-  }, [fetchUsers]);
 
   // ── Create user ──────────────────────────────────────────────────────────
   const handleCreate = async (values: any) => {
@@ -311,7 +300,7 @@ export default function UsersPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>User Management</Title>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={fetchUsers} loading={loading}>Refresh</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => fetchUsers()} loading={loading}>Refresh</Button>
           <Button type="primary" icon={<UserAddOutlined />} onClick={() => setCreateOpen(true)}>
             New User
           </Button>

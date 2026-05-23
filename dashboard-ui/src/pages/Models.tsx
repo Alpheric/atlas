@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Typography, Card, Table, Tag, Button, Modal, Form, Input, Select, Space, Row, Col, Spin, App } from 'antd';
 import { CloudServerOutlined, DeleteOutlined, SwapOutlined } from '@ant-design/icons';
 
@@ -9,8 +10,6 @@ const deleteModel = (name: string, serverUrl?: string) => api.delete(`/admin/oll
 const compareModels = (body: any) => api.post('/admin/models/compare', body).then(r => r.data);
 
 export default function Models() {
-  const [data, setData] = useState<any>({ data: [], servers: [] });
-  const [loading, setLoading] = useState(true);
   const [pullModalOpen, setPullModalOpen] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [compareModalOpen, setCompareModalOpen] = useState(false);
@@ -20,11 +19,10 @@ export default function Models() {
   const [compareForm] = Form.useForm();
   const { message: msgApi } = App.useApp();
 
-  const load = () => {
-    setLoading(true);
-    getOllamaModels().then(setData).catch(() => {}).finally(() => setLoading(false));
-  };
-  useEffect(load, []);
+  const { data = { data: [], servers: [] }, isLoading: loading, refetch } = useQuery<any>({
+    queryKey: ['ollamaModels'],
+    queryFn: getOllamaModels,
+  });
 
   const handlePull = async () => {
     setPulling(true);
@@ -34,7 +32,7 @@ export default function Models() {
       msgApi.success(`Pulling ${values.name}...`);
       setPullModalOpen(false);
       pullForm.resetFields();
-      setTimeout(load, 5000); // reload after pull starts
+      setTimeout(() => refetch(), 5000); // reload after pull starts
     } catch {}
     setPulling(false);
   };
@@ -42,7 +40,7 @@ export default function Models() {
   const handleDelete = async (name: string) => {
     await deleteModel(name);
     msgApi.success(`Deleted ${name}`);
-    load();
+    refetch();
   };
 
   const handleCompare = async () => {
