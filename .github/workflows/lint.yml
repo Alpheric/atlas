@@ -33,3 +33,34 @@ jobs:
         run: npm run build
       - name: unit tests
         run: npm test
+
+  backend-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: a1
+          POSTGRES_PASSWORD: a1
+          POSTGRES_DB: atlas_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U a1"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      A1_DATABASE_URL: postgresql+asyncpg://a1:a1@localhost:5432/atlas_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - name: Enable pgvector + run migrations
+        run: |
+          PGPASSWORD=a1 psql -h localhost -U a1 -d atlas_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          alembic upgrade head
+      - name: Run tests
+        # Provisioning tests are integration tests requiring platform-key
+        # provisioning setup + an open auth-design decision — excluded here.
+        run: pytest tests/ --ignore=tests/test_provisioning.py -q

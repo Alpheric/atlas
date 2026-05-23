@@ -136,7 +136,9 @@ class TestCorePipelineExecution:
                 result = await pipeline.execute(basic_input)
 
         assert result.error is not None
-        assert result.error_type == "provider_error"
+        # No chat provider available for the model → model_not_found
+        # (more specific than the old generic provider_error).
+        assert result.error_type == "model_not_found"
 
 
 class TestCorePipelineResult:

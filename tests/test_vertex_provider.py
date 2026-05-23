@@ -86,13 +86,15 @@ class TestModelAliases:
             vertex_api_key="k",
             vertex_project_id="",
             vertex_location="us-central1",
-            vertex_default_model="gemini-2.0-flash",
+            vertex_default_model="gemini-2.5-flash",
             vertex_web_search_enabled=False,
             vertex_timeout=60.0,
         ):
             provider = VertexProvider()
-        assert provider.supports_model("vertex_gemini_flash")
-        assert provider.supports_model("gemini-2.0-flash")
+        # gemini-2.0-flash was retired by Google + removed from providers.yaml;
+        # use the live 2.5 model + alias.
+        assert provider.supports_model("vertex_gemini_2_5_flash")
+        assert provider.supports_model("gemini-2.5-flash")
         assert not provider.supports_model("gpt-4o")
 
 
