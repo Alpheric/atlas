@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Row, Col, Card, Tag, List, Typography, Badge, Progress, Space,
@@ -36,9 +36,13 @@ const { Text } = Typography;
 
 const CHART_HEIGHT = 220;
 
+interface LiveEvent { type?: string; _t: number; [k: string]: any }
+
 export default function Overview() {
   const wsSubscribe = useWebSocketStore((s) => s.subscribe);
   const wsConnect   = useWebSocketStore((s) => s.connect);
+  const wsConnected = useWebSocketStore((s) => s.connected);
+  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
 
   const { data, isLoading } = useQuery<OverviewData>({
     queryKey: ['overview'],
@@ -57,7 +61,10 @@ export default function Overview() {
 
   useEffect(() => {
     wsConnect();
-    const unsub = wsSubscribe('*', () => {});
+    // Capture live events into a capped ticker (was previously discarded).
+    const unsub = wsSubscribe('*', (ev) => {
+      setLiveEvents((prev) => [{ ...ev, _t: Date.now() }, ...prev].slice(0, 15));
+    });
     return () => unsub();
   }, []);
 
@@ -467,6 +474,48 @@ export default function Overview() {
                 </Col>
               ))}
             </Row>
+          </Card>
+        </Col>
+      </Row>
+
+      {/* Live feed — real-time events over the admin WebSocket */}
+      <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+        <Col span={24}>
+          <Card
+            size="small"
+            title={
+              <Space>
+                Live Feed
+                <Badge
+                  status={wsConnected ? 'processing' : 'default'}
+                  text={wsConnected ? 'connected' : 'disconnected'}
+                />
+              </Space>
+            }
+          >
+            {liveEvents.length === 0 ? (
+              <Typography.Text type="secondary">
+                {wsConnected ? 'Waiting for live events…' : 'WebSocket disconnected.'}
+              </Typography.Text>
+            ) : (
+              <List
+                size="small"
+                dataSource={liveEvents}
+                renderItem={(ev) => (
+                  <List.Item style={{ padding: '4px 0' }}>
+                    <Space size={8} wrap>
+                      <Tag color="blue">{ev.type ?? 'event'}</Tag>
+                      {ev.model && <Tag>{ev.model}</Tag>}
+                      {ev.provider && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{ev.provider}</Typography.Text>}
+                      {ev.latency_ms != null && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{ev.latency_ms}ms</Typography.Text>}
+                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                        {new Date(ev._t).toLocaleTimeString()}
+                      </Typography.Text>
+                    </Space>
+                  </List.Item>
+                )}
+              />
+            )}
           </Card>
         </Col>
       </Row>
