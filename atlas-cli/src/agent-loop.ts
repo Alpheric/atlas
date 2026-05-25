@@ -63,11 +63,20 @@ export function buildSystemPrompt(
   workspaceRoot: string,
   customInstructions?: string
 ): string {
-  return `You are Atlas Code, an expert agentic coding assistant built by Alpheric.
+  return `You are Atlas Code, an expert agentic coding assistant built by Alpheric.AI.
 
 You are working in: ${workspaceRoot}
 
 ${projectContext.summary}
+
+## Identity (do not contradict)
+
+- You are **Atlas, built by Alpheric.AI**. You are NOT Claude, GPT, Gemini,
+  Llama, or any other model, and you were NOT built by Anthropic, OpenAI,
+  Google, or Meta. Never claim otherwise.
+- If asked your model, version, training data, or knowledge-cutoff date: say you
+  are Atlas by Alpheric.AI and that the underlying model details and cutoff are
+  not disclosed. Do NOT invent a vendor, version number, or date.
 
 ## Behaviour
 
@@ -103,6 +112,21 @@ ${projectContext.summary}
   — do not repeat it. After two failed attempts at the same thing, stop and
   report what is blocking you instead of retrying identically.
 - Confirm the working directory before assuming it; if it's ambiguous, ask.
+
+## Handle failures honestly
+
+- When a command fails (non-zero exit) — e.g. \`pip install\` or \`npm install\`
+  errors — say so explicitly and either fix the root cause or stop. Never
+  silently ignore a failure.
+- Never substitute a different deliverable than what was asked because a
+  dependency failed. If you were asked for a .docx and the library won't
+  install, report that — don't quietly produce a .md instead.
+
+## Multi-step projects
+
+- For "create a project" tasks, after making a directory move on immediately to
+  scaffolding files and installing dependencies. Do not call mkdir/create_directory
+  repeatedly — create the folder once, then build inside it.
 ${customInstructions ? `\n## Project Instructions\n\n${customInstructions}` : ""}`;
 }
 
@@ -189,12 +213,19 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
   let finalUsage: UsageInfo | undefined;
   let config = { ...opts.config };
 
-  // Loop / no-progress detection (BUG-10, BUG-13): count identical tool calls
-  // (name + args) across turns. After SOFT_LIMIT we nudge the model; after
-  // HARD_LIMIT we abort the loop so it can't repeat mkdir/ls/etc. forever.
-  const toolCallCounts = new Map<string, number>();
-  const LOOP_SOFT_LIMIT = 3;
-  const LOOP_HARD_LIMIT = 6;
+  // Loop / no-progress detection. Three independent signals:
+  //  1. identical call (name+args) repeated  → blocked before executing
+  //  2. same (name+result) repeated          → no-progress, abort after
+  //  3. global tool-call budget exceeded      → backstop for varying-arg thrash
+  // Crucially the correction is written into the message history (a tool
+  // message the model actually reads), not just printed to the user — the
+  // model ignored UI-only warnings in earlier reports.
+  const toolCallCounts = new Map<string, number>(); // name+args
+  const resultCounts = new Map<string, number>();    // name+result (no-progress)
+  let totalToolCalls = 0;
+  const SIG_REPEAT_LIMIT = 3;       // identical args N× → block + abort
+  const NO_PROGRESS_LIMIT = 3;      // same tool+result N× → abort
+  const GLOBAL_CALL_BUDGET = 100;   // total calls per run → backstop
   let loopAborted = false;
 
   // Auto-route model if enabled
@@ -311,33 +342,47 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
     // ── Execute each tool call, append tool result messages ────────────────
     // (OpenAI requires one tool result message per tool call)
     for (const call of pendingToolCalls) {
-      // ── Loop / no-progress guard (BUG-10, BUG-13) ─────────────────────────
+      // ── Loop / no-progress guard ──────────────────────────────────────────
       const sig = `${call.name}:${JSON.stringify(call.args)}`;
       const seen = (toolCallCounts.get(sig) ?? 0) + 1;
       toolCallCounts.set(sig, seen);
+      totalToolCalls += 1;
 
-      if (seen > LOOP_HARD_LIMIT) {
-        await onEvent({
-          type: "tool_result",
-          toolResult: `[Loop aborted: '${call.name}' was called ${seen} times with identical arguments without progress.]`,
-        });
+      // (3) Global backstop — catches varying-arg thrashing (e.g. mkdir of
+      // hundreds of slightly different paths) that per-signature checks miss.
+      if (totalToolCalls > GLOBAL_CALL_BUDGET) {
         messages.push({
           role: "tool",
           tool_call_id: call.id,
           content:
-            `[Loop detected] You have called ${call.name} with the same arguments ` +
-            `${seen} times. This is being blocked. Stop repeating this call; either ` +
-            `take a different action or stop and report what is blocking you.`,
+            `[Stopped] You have made over ${GLOBAL_CALL_BUDGET} tool calls without ` +
+            `completing the task. Stop now and report what you accomplished and what is blocking you.`,
         });
         loopAborted = true;
         continue;
       }
 
-      if (seen >= LOOP_SOFT_LIMIT) {
-        // Let it run once more but inject a nudge alongside the result later.
+      // (1) Identical call repeated → block BEFORE executing it again.
+      if (seen >= SIG_REPEAT_LIMIT) {
+        await onEvent({
+          type: "tool_result",
+          toolResult: `[Loop blocked: '${call.name}' called ${seen}× with identical arguments.]`,
+        });
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content:
+            `[Loop blocked] You called ${call.name} with identical arguments ${seen} times — ` +
+            `it is NOT making progress. Do something different (read a file, run a different ` +
+            `command, write code) or stop and report what is blocking you. Do not repeat this call.`,
+        });
+        loopAborted = true;
+        continue;
+      }
+      if (seen === SIG_REPEAT_LIMIT - 1) {
         await onEvent({
           type: "chunk",
-          text: `\n_[warning: '${call.name}' repeated ${seen}× — may be looping]_\n`,
+          text: `\n_[warning: '${call.name}' repeated — change approach or it will be stopped]_\n`,
         });
       }
 
@@ -448,16 +493,30 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{
         const tries = toolCallCounts.get(sig) ?? 1;
         if (tries === 1) {
           toolMessage +=
-            "\n\n[Recovery] This call failed. Diagnose the cause from the error " +
-            "above and take a corrective action (e.g. read the relevant file/logs, " +
-            "fix the underlying issue, or adjust the command). Do not repeat the " +
-            "same call unchanged.";
+            "\n\n[Recovery] This call FAILED (non-zero exit). Tell the user it failed, " +
+            "diagnose the cause from the error above, and take a corrective action (read " +
+            "the relevant file/logs, fix the root cause, or adjust the command). Do NOT " +
+            "silently continue or switch to a different deliverable than the user asked for.";
         } else {
           toolMessage +=
             `\n\n[Recovery] This has now failed ${tries} times. Stop retrying this ` +
             "approach. Either try a materially different strategy or stop and report " +
             "exactly what is blocking you.";
         }
+      }
+
+      // (2) No-progress detection: same tool returning the same result repeatedly
+      // (e.g. `ls` showing the same tree, `npm install` re-succeeding with the
+      // same output, `mkdir` of an existing dir) means the task isn't advancing.
+      const resultSig = `${call.name}::${(toolResult || "").slice(0, 400)}`;
+      const rseen = (resultCounts.get(resultSig) ?? 0) + 1;
+      resultCounts.set(resultSig, rseen);
+      if (rseen >= NO_PROGRESS_LIMIT) {
+        toolMessage +=
+          `\n\n[No progress] '${call.name}' has returned the same result ${rseen} times. ` +
+          `This is not advancing the task. Stop repeating it — take a different action ` +
+          `(read/write files, run a different command) or stop and report what is blocking you.`;
+        loopAborted = true;
       }
 
       // Append tool result as role="tool" message
